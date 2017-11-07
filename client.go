@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	recordsTimeout  = 5 * time.Second
+	recordsTimeout  = 15 * time.Second
 	maxRecordSize   = 1000 * 1024     // The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1000 KB
 	maxBatchRecords = 500             // The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
 	maxBatchSize    = 4 * 1024 * 1024 // 4 MB per call

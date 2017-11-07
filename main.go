@@ -11,7 +11,7 @@ import (
 const (
 	defaultBufferSize = 1024
 	defaultWorkers    = 2
-	defaultMaxRecords = 10
+	defaultMaxRecords = 500
 )
 
 // Config is the general configuration for the server
