@@ -34,8 +34,8 @@ type Server struct {
 	C       chan []byte
 	clients []*Client
 
-	reload   chan bool
-	done     chan bool
+	chReload chan bool
+	chDone   chan bool
 	failing  bool
 	reseting bool
 	exiting  bool
@@ -47,16 +47,16 @@ type Server struct {
 }
 
 // New create a pool of workers
-func New(cfg *Config) *Server {
+func New(cfg Config) *Server {
 
 	srv := &Server{
-		done:   make(chan bool),
-		reload: make(chan bool),
+		chDone:   make(chan bool),
+		chReload: make(chan bool),
 	}
 
 	go srv._reload()
 
-	srv.Reload(cfg)
+	srv.Reload(&cfg)
 
 	return srv
 }
@@ -82,7 +82,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 
 	log.Printf("Firehose config: %#v", srv.cfg)
 
-	srv.reConnect()
+	srv.chReload <- true
 
 	return nil
 }
@@ -94,7 +94,7 @@ func (srv *Server) Exit() {
 	srv.exiting = true
 	srv.Unlock()
 
-	close(srv.reload)
+	close(srv.chReload)
 
 	for _, c := range srv.clients {
 		c.Exit()
@@ -107,7 +107,7 @@ func (srv *Server) Exit() {
 	close(srv.C)
 
 	// finishing the server
-	srv.done <- true
+	srv.chDone <- true
 }
 
 func (srv *Server) isExiting() bool {
@@ -123,10 +123,10 @@ func (srv *Server) isExiting() bool {
 
 // Waiting to the server if is running
 func (srv *Server) Waiting() {
-	if srv.done == nil {
+	if srv.chDone == nil {
 		return
 	}
 
-	<-srv.done
-	close(srv.done)
+	<-srv.chDone
+	close(srv.chDone)
 }

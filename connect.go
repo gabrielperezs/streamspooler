@@ -18,7 +18,7 @@ const (
 )
 
 func (srv *Server) _reload() {
-	for _ = range srv.reload {
+	for _ = range srv.chReload {
 		if srv.isExiting() {
 			continue
 		}
@@ -55,14 +55,7 @@ func (srv *Server) failure() {
 	log.Printf("Firehose: %d errors detected", srv.errors)
 
 	if srv.errors > maxErrors {
-		srv.reConnect()
-	}
-}
-
-func (srv *Server) reConnect() {
-	select {
-	case srv.reload <- true:
-	default:
+		srv.chReload <- true
 	}
 }
 
