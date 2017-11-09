@@ -2,7 +2,6 @@ package firehosePool
 
 import (
 	"log"
-	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -11,21 +10,41 @@ import (
 )
 
 const (
-	maxConnectionsTries = 3
-	connectionRetry     = 5 * time.Second
-	connectTimeout      = 15 * time.Second
-	errorsFrame         = 10 * time.Second
-	maxErrors           = 10 // Limit of errors to restart the connection
+	connectionRetry = 2 * time.Second
+	connectTimeout  = 15 * time.Second
+	errorsFrame     = 10 * time.Second
+	maxErrors       = 10 // Limit of errors to restart the connection
 
 )
 
-func (srv *Server) failure() {
-	srv.Lock()
-	defer srv.Unlock()
+func (srv *Server) _reload() {
+	for _ = range srv.reload {
+		if srv.isExiting() {
+			continue
+		}
 
-	if srv.reseting || srv.exiting {
+		if srv.C == nil {
+			srv.C = make(chan []byte, srv.cfg.Buffer)
+		}
+
+		srv.Lock()
+		srv.failing = true
+		srv.Unlock()
+
+		if err := srv.clientsReset(); err != nil {
+			log.Printf("Firehose ERROR: can't connect to kinesis: %s", err)
+			time.Sleep(connectionRetry)
+		}
+	}
+}
+
+func (srv *Server) failure() {
+	if srv.isExiting() {
 		return
 	}
+
+	srv.Lock()
+	defer srv.Unlock()
 
 	if time.Now().Sub(srv.lastError) > errorsFrame {
 		srv.errors = 0
@@ -36,42 +55,20 @@ func (srv *Server) failure() {
 	log.Printf("Firehose: %d errors detected", srv.errors)
 
 	if srv.errors > maxErrors {
-		go srv.retry()
+		srv.reConnect()
 	}
 }
 
-func (srv *Server) retry() {
-	srv.Lock()
-	defer srv.Unlock()
-
-	if srv.failing {
-		return
-	}
-
-	srv.failing = true
-	tries := 0
-
-	for {
-		if srv.clientsReset() == nil {
-			return
-		}
-
-		tries++
-		log.Printf("Firehose ERROR: %d attempts to connect to kinens", tries)
-
-		if tries >= maxConnectionsTries {
-			time.Sleep(connectionRetry * 2)
-		} else {
-			time.Sleep(connectionRetry)
-		}
+func (srv *Server) reConnect() {
+	select {
+	case srv.reload <- true:
+	default:
 	}
 }
 
 func (srv *Server) clientsReset() (err error) {
-
-	if srv.exiting {
-		return nil
-	}
+	srv.Lock()
+	defer srv.Unlock()
 
 	srv.reseting = true
 	defer func() { srv.reseting = false }()
@@ -132,14 +129,12 @@ func (srv *Server) clientsReset() (err error) {
 			srv.clients[k].Exit()
 			srv.clients = append(srv.clients[:k], srv.clients[k+1:]...)
 		}
-		atomic.StoreInt64(&clientCount, int64(len(srv.clients)))
 	} else {
 		// If the config define higher number than the active clients start new clients
 		for i := currClients; i < srv.cfg.Workers; i++ {
 			srv.clients = append(srv.clients, NewClient(srv))
 		}
 	}
-	atomic.StoreInt64(&clientCount, int64(len(srv.clients)))
 
 	return nil
 }

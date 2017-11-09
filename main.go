@@ -34,6 +34,7 @@ type Server struct {
 	C       chan []byte
 	clients []*Client
 
+	reload   chan bool
 	done     chan bool
 	failing  bool
 	reseting bool
@@ -46,13 +47,16 @@ type Server struct {
 }
 
 // New create a pool of workers
-func New(cfg Config) *Server {
+func New(cfg *Config) *Server {
 
 	srv := &Server{
-		done: make(chan bool),
+		done:   make(chan bool),
+		reload: make(chan bool),
 	}
 
-	srv.Reload(&cfg)
+	go srv._reload()
+
+	srv.Reload(cfg)
 
 	return srv
 }
@@ -68,8 +72,6 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		srv.cfg.Buffer = defaultBufferSize
 	}
 
-	srv.C = make(chan []byte, srv.cfg.Buffer)
-
 	if srv.cfg.Workers == 0 {
 		srv.cfg.Workers = defaultWorkers
 	}
@@ -78,26 +80,53 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		srv.cfg.MaxRecords = defaultMaxRecords
 	}
 
-	log.Printf("C: %#v", srv.cfg)
+	log.Printf("Firehose config: %#v", srv.cfg)
 
-	go srv.retry()
+	srv.reConnect()
 
 	return nil
 }
 
+// Exit terminate all clients and close the channels
 func (srv *Server) Exit() {
+
+	srv.Lock()
 	srv.exiting = true
+	srv.Unlock()
+
+	close(srv.reload)
 
 	for _, c := range srv.clients {
 		c.Exit()
 	}
 
-	log.Printf("Firehose: messages lost %d", len(srv.C))
+	if len(srv.C) > 0 {
+		log.Printf("Firehose: messages lost %d", len(srv.C))
+	}
+
+	close(srv.C)
 
 	// finishing the server
 	srv.done <- true
 }
 
+func (srv *Server) isExiting() bool {
+	srv.Lock()
+	defer srv.Unlock()
+
+	if srv.exiting {
+		return true
+	}
+
+	return false
+}
+
+// Waiting to the server if is running
 func (srv *Server) Waiting() {
+	if srv.done == nil {
+		return
+	}
+
 	<-srv.done
+	close(srv.done)
 }
