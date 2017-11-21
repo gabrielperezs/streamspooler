@@ -33,15 +33,6 @@ var recordPool = sync.Pool{
 	},
 }
 
-func recordPoolGet() *firehose.Record {
-	return recordPool.Get().(*firehose.Record)
-}
-
-func recordPoolPut(r *firehose.Record) {
-	r.Data = r.Data[:0]
-	recordPool.Put(r)
-}
-
 // Client is the thread that connect to the remote redis server
 type Client struct {
 	sync.Mutex
@@ -140,7 +131,8 @@ func (clt *Client) listen() {
 			if !clt.srv.cfg.ConcatRecords || clt.buff.Len()+recordSize+1 >= maxRecordSize || clt.count+1 > clt.srv.cfg.MaxRecords {
 				if clt.buff.Len() > 0 {
 					// Save in new record
-					clt.batch = append(clt.batch, clt.buff)
+					c := clt.buff
+					clt.batch = append(clt.batch, c)
 					clt.buff = pool.Get()
 				}
 			}
@@ -152,7 +144,8 @@ func (clt *Client) listen() {
 
 		case <-clt.t.C:
 			if clt.buff.Len() > 0 {
-				clt.batch = append(clt.batch, clt.buff)
+				c := clt.buff
+				clt.batch = append(clt.batch, c)
 				clt.buff = pool.Get()
 			}
 
@@ -177,26 +170,29 @@ func (clt *Client) flush() {
 	}
 	clt.t.Reset(recordsTimeout)
 
+	size := len(clt.batch)
 	// Don't send empty batch
-	if len(clt.batch) == 0 {
+	if size == 0 {
 		return
 	}
 
-	var batchRecords []*firehose.Record
+	batchRecords := make([]*firehose.Record, size)
 
-	// Put slice in the pull after sent to AWS Firehose
-	for _, r := range clt.batch {
-		batchRecords = append(batchRecords, recordPoolGet().SetData(r.Bytes()))
-		// Put slice buffers in the pull after sent
-		pool.Put(r)
+	// Create slice with the struct need by firehose
+	for i, b := range clt.batch {
+		//batchRecords[i] = recordPool.Get().(*firehose.Record)
+		batchRecords[i] = &firehose.Record{}
+		batchRecords[i].Data = b.Bytes()
 	}
 
 	// Send the batch to AWS Firehose
 	clt.putRecordBatch(batchRecords)
 
-	// Put slice records in the pull after sent
-	for _, r := range batchRecords {
-		recordPoolPut(r)
+	// Put slice and batchRecords buffers in the pull after sent
+	for _, b := range clt.batch {
+		//batchRecords[i].Data = nil
+		//recordPool.Put(batchRecords[i])
+		pool.Put(b)
 	}
 
 	clt.batchSize = 0
@@ -245,7 +241,8 @@ func (clt *Client) Exit() {
 	<-clt.finish
 
 	if clt.buff.Len() > 0 {
-		clt.batch = append(clt.batch, clt.buff)
+		c := clt.buff
+		clt.batch = append(clt.batch, c)
 	}
 
 	clt.flush()
