@@ -27,12 +27,6 @@ var (
 
 var pool = &bytebufferpool.Pool{}
 
-var recordPool = sync.Pool{
-	New: func() interface{} {
-		return &firehose.Record{}
-	},
-}
-
 // Client is the thread that connect to the remote redis server
 type Client struct {
 	sync.Mutex
@@ -42,6 +36,7 @@ type Client struct {
 	count       int
 	batch       []*bytebufferpool.ByteBuffer
 	batchSize   int
+	records     []*firehose.Record
 	status      int
 	finish      chan bool
 	done        chan bool
@@ -55,12 +50,13 @@ func NewClient(srv *Server) *Client {
 	n := atomic.AddInt64(&clientCount, 1)
 
 	clt := &Client{
-		done:   make(chan bool),
-		finish: make(chan bool),
-		status: 0,
-		srv:    srv,
-		ID:     n,
-		t:      time.NewTimer(recordsTimeout),
+		done:    make(chan bool),
+		finish:  make(chan bool),
+		status:  0,
+		srv:     srv,
+		ID:      n,
+		t:       time.NewTimer(recordsTimeout),
+		records: make([]*firehose.Record, 0, maxBatchRecords),
 	}
 
 	if err := clt.Reload(); err != nil {
@@ -176,42 +172,24 @@ func (clt *Client) flush() {
 		return
 	}
 
-	batchRecords := make([]*firehose.Record, size)
-
 	// Create slice with the struct need by firehose
-	for i, b := range clt.batch {
-		//batchRecords[i] = recordPool.Get().(*firehose.Record)
-		batchRecords[i] = &firehose.Record{}
-		batchRecords[i].Data = b.Bytes()
-	}
-
-	// Send the batch to AWS Firehose
-	clt.putRecordBatch(batchRecords)
-
-	// Put slice and batchRecords buffers in the pull after sent
 	for _, b := range clt.batch {
-		//batchRecords[i].Data = nil
-		//recordPool.Put(batchRecords[i])
-		pool.Put(b)
+		clt.records = append(clt.records, &firehose.Record{Data: b.B})
 	}
 
-	clt.batchSize = 0
-	clt.batch = nil
-	clt.count = 0
-}
-
-// putRecordBatch is the client connection to AWS Firehose
-func (clt *Client) putRecordBatch(records []*firehose.Record) {
+	// Create the request
 	req, _ := clt.srv.awsSvc.PutRecordBatchRequest(&firehose.PutRecordBatchInput{
 		DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
-		Records:            records,
+		Records:            clt.records,
 	})
 
+	// Add context timeout to the request
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer cancel()
 
 	req.SetContext(ctx)
 
+	// Send the request
 	err := req.Send()
 	if err != nil {
 		if req.IsErrorThrottle() {
@@ -220,10 +198,17 @@ func (clt *Client) putRecordBatch(records []*firehose.Record) {
 			log.Printf("Firehose client %d: ERROR PutRecordBatch->Send: %s", clt.ID, err)
 		}
 		clt.srv.failure()
-		return
 	}
 
-	//log.Printf("Firehose client %d: sent batch with %d records, %d lines, %d bytes", clt.ID, len(records), clt.count, clt.batchSize)
+	// Put slice bytes in the pull after sent
+	for _, b := range clt.batch {
+		pool.Put(b)
+	}
+
+	clt.batchSize = 0
+	clt.batch = nil
+	clt.count = 0
+	clt.records = clt.records[:0]
 }
 
 // Exit finish the go routine of the client
