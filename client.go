@@ -111,7 +111,7 @@ func (clt *Client) listen() {
 			}
 
 			if recordSize+1 >= maxRecordSize {
-				log.Printf("Firehose client %d: EFRROR: one record is over the limit %d/%d", clt.ID, recordSize, maxRecordSize)
+				log.Printf("Firehose client %d: ERROR: one record is over the limit %d/%d", clt.ID, recordSize, maxRecordSize)
 				continue
 			}
 
