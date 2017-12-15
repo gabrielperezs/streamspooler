@@ -91,10 +91,6 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		srv.cfg.MaxWorkers = defaultMaxWorkers
 	}
 
-	if srv.cfg.MaxRecords == 0 {
-		srv.cfg.MaxRecords = defaultMaxRecords
-	}
-
 	if srv.cfg.ThresholdWarmUp == 0 {
 		srv.cfg.ThresholdWarmUp = defaultThresholdWarmUp
 	}
