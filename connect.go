@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	connectionRetry = 2 * time.Second
-	connectTimeout  = 15 * time.Second
-	errorsFrame     = 10 * time.Second
-	maxErrors       = 10 // Limit of errors to restart the connection
-
+	connectionRetry         = 2 * time.Second
+	connectTimeout          = 15 * time.Second
+	errorsFrame             = 10 * time.Second
+	maxErrors               = 10 // Limit of errors to restart the connection
+	limitIntervalConnection = 30 * time.Second
 )
 
 func (srv *Server) _reload() {
@@ -66,65 +66,72 @@ func (srv *Server) clientsReset() (err error) {
 	srv.reseting = true
 	defer func() { srv.reseting = false }()
 
-	log.Printf("Firehose Reload config to the stream %s", srv.cfg.StreamName)
+	if srv.errors == 0 && srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
+		log.Printf("Firehose Reload config to the stream %s", srv.cfg.StreamName)
 
-	var sess *session.Session
+		var sess *session.Session
 
-	if srv.cfg.Profile != "" {
-		sess, err = session.NewSessionWithOptions(session.Options{Profile: srv.cfg.Profile})
-	} else {
-		sess, err = session.NewSession()
+		if srv.cfg.Profile != "" {
+			sess, err = session.NewSessionWithOptions(session.Options{Profile: srv.cfg.Profile})
+		} else {
+			sess, err = session.NewSession()
+		}
+
+		if err != nil {
+			log.Printf("Firehose ERROR: session: %s", err)
+
+			srv.errors++
+			srv.lastError = time.Now()
+			return err
+		}
+
+		srv.awsSvc = firehose.New(sess, &aws.Config{Region: aws.String(srv.cfg.Region)})
+		stream := &firehose.DescribeDeliveryStreamInput{
+			DeliveryStreamName: &srv.cfg.StreamName,
+		}
+
+		var l *firehose.DescribeDeliveryStreamOutput
+		l, err = srv.awsSvc.DescribeDeliveryStream(stream)
+		if err != nil {
+			log.Printf("Firehose ERROR: describe stream: %s", err)
+
+			srv.errors++
+			srv.lastError = time.Now()
+			return err
+		}
+
+		log.Printf("Firehose Connected to %s (%s) status %s",
+			*l.DeliveryStreamDescription.DeliveryStreamName,
+			*l.DeliveryStreamDescription.DeliveryStreamARN,
+			*l.DeliveryStreamDescription.DeliveryStreamStatus)
+
+		srv.lastConnection = time.Now()
+		srv.errors = 0
 	}
 
-	if err != nil {
-		log.Printf("Firehose ERROR: session: %s", err)
+	defer func() {
+		log.Printf("Firehose %s clients %d, in the queue %d/%d", srv.cfg.StreamName, len(srv.clients), len(srv.C), cap(srv.C))
+	}()
 
-		srv.errors++
-		srv.lastError = time.Now()
-		return err
-	}
-
-	srv.awsSvc = firehose.New(sess, &aws.Config{Region: aws.String(srv.cfg.Region)})
-	stream := &firehose.DescribeDeliveryStreamInput{
-		DeliveryStreamName: &srv.cfg.StreamName,
-	}
-
-	var l *firehose.DescribeDeliveryStreamOutput
-	l, err = srv.awsSvc.DescribeDeliveryStream(stream)
-	if err != nil {
-		log.Printf("Firehose ERROR: describe stream: %s", err)
-
-		srv.errors++
-		srv.lastError = time.Now()
-		return err
-	}
-
-	log.Printf("Firehose Connected to %s (%s) status %s",
-		*l.DeliveryStreamDescription.DeliveryStreamName,
-		*l.DeliveryStreamDescription.DeliveryStreamARN,
-		*l.DeliveryStreamDescription.DeliveryStreamStatus)
-
-	srv.lastConnection = time.Now()
-	srv.errors = 0
 	srv.failing = false
 
 	currClients := len(srv.clients)
 
 	// No changes in the number of clients
-	if currClients == srv.cfg.Workers {
+	if currClients == srv.cliDesired {
 		return nil
 	}
 
 	// If the config define lower number than the active clients remove the difference
-	if currClients > srv.cfg.Workers {
-		for i := currClients; i > srv.cfg.Workers; i-- {
+	if currClients > srv.cliDesired {
+		for i := currClients; i > srv.cliDesired; i-- {
 			k := i - 1
 			srv.clients[k].Exit()
 			srv.clients = append(srv.clients[:k], srv.clients[k+1:]...)
 		}
 	} else {
 		// If the config define higher number than the active clients start new clients
-		for i := currClients; i < srv.cfg.Workers; i++ {
+		for i := currClients; i < srv.cliDesired; i++ {
 			srv.clients = append(srv.clients, NewClient(srv))
 		}
 	}

@@ -18,6 +18,8 @@ const (
 	maxRecordSize   = 1000 * 1024     // The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1000 KB
 	maxBatchRecords = 500             // The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
 	maxBatchSize    = 4 * 1024 * 1024 // 4 MB per call
+	failureWait     = 1 * time.Second
+	failureMaxTries = 3
 )
 
 var (
@@ -64,7 +66,7 @@ func NewClient(srv *Server) *Client {
 		return nil
 	}
 
-	//log.Printf("Firehose client %d ready", clt.ID)
+	log.Printf("Firehose client %s [%d]: ready", clt.srv.cfg.StreamName, clt.ID)
 
 	return clt
 }
@@ -84,8 +86,6 @@ func (clt *Client) Reload() error {
 }
 
 func (clt *Client) listen() {
-	defer log.Printf("Firehose client %d: Closed listener", clt.ID)
-
 	clt.status = 1
 
 	clt.buff = pool.Get()
@@ -111,7 +111,7 @@ func (clt *Client) listen() {
 			}
 
 			if recordSize+1 >= maxRecordSize {
-				log.Printf("Firehose client %d: ERROR: one record is over the limit %d/%d", clt.ID, recordSize, maxRecordSize)
+				log.Printf("Firehose client %s [%d]: ERROR: one record is over the limit %d/%d", clt.srv.cfg.StreamName, clt.ID, recordSize, maxRecordSize)
 				continue
 			}
 
@@ -148,7 +148,8 @@ func (clt *Client) listen() {
 			clt.flush()
 
 		case <-clt.done:
-			log.Printf("Firehose client %d: closing..", clt.ID)
+			//log.Printf("Firehose client %s [%d]: closing..", clt.srv.cfg.StreamName, clt.ID)
+			clt.flush()
 			clt.finish <- true
 			return
 		}
@@ -177,58 +178,78 @@ func (clt *Client) flush() {
 		clt.records = append(clt.records, &firehose.Record{Data: b.B})
 	}
 
-	// Create the request
-	req, _ := clt.srv.awsSvc.PutRecordBatchRequest(&firehose.PutRecordBatchInput{
-		DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
-		Records:            clt.records,
-	})
+	defer func() {
+		// Put slice bytes in the pull after sent
+		for _, b := range clt.batch {
+			pool.Put(b)
+		}
 
-	// Add context timeout to the request
-	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
-	defer cancel()
+		clt.batchSize = 0
+		clt.batch = nil
+		clt.count = 0
+		clt.records = clt.records[:0]
+	}()
 
-	req.SetContext(ctx)
+	try := 0
+	for {
 
-	// Send the request
-	err := req.Send()
-	if err != nil {
+		// Create the request
+		req, _ := clt.srv.awsSvc.PutRecordBatchRequest(&firehose.PutRecordBatchInput{
+			DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
+			Records:            clt.records,
+		})
+
+		// Add context timeout to the request
+		ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+		defer cancel()
+
+		req.SetContext(ctx)
+
+		// Send the request
+		err := req.Send()
+		if err == nil {
+			return
+		}
+
 		if req.IsErrorThrottle() {
-			log.Printf("Firehose client %d: ERROR IsErrorThrottle: %s", clt.ID, err)
+			log.Printf("Firehose client %s [%d]: ERROR IsErrorThrottle: %s", clt.srv.cfg.StreamName, clt.ID, err)
 		} else {
-			log.Printf("Firehose client %d: ERROR PutRecordBatch->Send: %s", clt.ID, err)
+			log.Printf("Firehose client %s [%d]: ERROR PutRecordBatch->Send: %s", clt.srv.cfg.StreamName, clt.ID, err)
 		}
 		clt.srv.failure()
-	}
 
-	// Put slice bytes in the pull after sent
-	for _, b := range clt.batch {
-		pool.Put(b)
-	}
+		// If there is an error and is a critical message, try again in 1 second
+		if clt.srv.cfg.Critical {
+			// Limit of tries
+			try++
+			if try > failureMaxTries {
+				log.Printf("Firehose client %s [%d]: ERROR Max retry, %d messages lost", clt.srv.cfg.StreamName, clt.ID, size)
+				return
+			}
 
-	clt.batchSize = 0
-	clt.batch = nil
-	clt.count = 0
-	clt.records = clt.records[:0]
+			// Wait for the next try
+			time.Sleep(failureWait)
+		}
+	}
 }
 
 // Exit finish the go routine of the client
 func (clt *Client) Exit() {
-	defer log.Printf("Firehose client %d: Exit, %d records lost", clt.ID, len(clt.batch))
-
-	if !clt.t.Stop() {
-		select {
-		case <-clt.t.C:
-		default:
-		}
-	}
-
 	clt.done <- true
 	<-clt.finish
 
 	if clt.buff.Len() > 0 {
 		c := clt.buff
 		clt.batch = append(clt.batch, c)
+		clt.buff = pool.Get()
 	}
 
 	clt.flush()
+
+	if l := len(clt.batch); l > 0 {
+		log.Printf("Firehose client %s [%d]: Exit, %d records lost", clt.srv.cfg.StreamName, clt.ID, l)
+		return
+	}
+
+	log.Printf("Firehose client %s [%d]: Exit", clt.srv.cfg.StreamName, clt.ID)
 }

@@ -6,22 +6,34 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/firehose"
+	"github.com/gabrielperezs/monad"
 )
 
 const (
-	defaultBufferSize = 1024
-	defaultWorkers    = 2
-	defaultMaxRecords = 500
+	defaultBufferSize      = 1024
+	defaultWorkers         = 1
+	defaultMaxWorkers      = 10
+	defaultMaxRecords      = 500
+	defaultThresholdWarmUp = 0.6
+	defaultCoolDownPeriod  = 15 * time.Second
 )
 
 // Config is the general configuration for the server
 type Config struct {
-	Workers       int
+	// Internal clients details
+	MaxWorkers      int
+	ThresholdWarmUp float64
+	Interval        time.Duration
+	CoolDownPeriod  time.Duration
+	Critical        bool // Handle this stream as critical
+
+	// Limits
 	Buffer        int
 	ConcatRecords bool // Contact many rows in one firehose record
 	MaxRecords    int  // To send in batch to Kinesis
-	Compress      bool
+	Compress      bool // Compress records with snappy
 
+	// Authentication and enpoints
 	StreamName string // Kinesis/Firehose stream name
 	Region     string // AWS region
 	Profile    string // AWS Profile name
@@ -30,9 +42,12 @@ type Config struct {
 type Server struct {
 	sync.Mutex
 
-	cfg     Config
-	C       chan []byte
-	clients []*Client
+	cfg        Config
+	C          chan []byte
+	clients    []*Client
+	cliDesired int
+
+	monad *monad.Monad
 
 	chReload chan bool
 	chDone   chan bool
@@ -72,15 +87,60 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		srv.cfg.Buffer = defaultBufferSize
 	}
 
-	if srv.cfg.Workers == 0 {
-		srv.cfg.Workers = defaultWorkers
+	if srv.cfg.MaxWorkers == 0 {
+		srv.cfg.MaxWorkers = defaultMaxWorkers
 	}
 
 	if srv.cfg.MaxRecords == 0 {
 		srv.cfg.MaxRecords = defaultMaxRecords
 	}
 
+	if srv.cfg.ThresholdWarmUp == 0 {
+		srv.cfg.ThresholdWarmUp = defaultThresholdWarmUp
+	}
+
+	if srv.cfg.CoolDownPeriod.Nanoseconds() == 0 {
+		srv.cfg.CoolDownPeriod = defaultCoolDownPeriod
+	}
+
+	monadCfg := &monad.Config{
+		Min:            uint64(1),
+		Max:            uint64(srv.cfg.MaxWorkers),
+		Interval:       srv.cfg.Interval,
+		CoolDownPeriod: srv.cfg.CoolDownPeriod,
+		WarmFn: func() bool {
+			if srv.cliDesired == 0 {
+				return true
+			}
+
+			l := float64(len(srv.C))
+			if l == 0 {
+				return false
+			}
+
+			currPtc := (l / float64(cap(srv.C))) * 100
+
+			//log.Printf("Debug: Queue %v, Chan %v%%/%v, Limit: %v%%", l, currPtc, cap(srv.C), srv.cfg.ThresholdWarmUp*100)
+
+			if currPtc > srv.cfg.ThresholdWarmUp*100 {
+				return true
+			}
+			return false
+		},
+		DesireFn: func(n uint64) {
+			srv.cliDesired = int(n)
+			srv.chReload <- true
+		},
+	}
+
+	if srv.monad == nil {
+		srv.monad = monad.New(monadCfg)
+	} else {
+		srv.monad.Reload(monadCfg)
+	}
+
 	log.Printf("Firehose config: %#v", srv.cfg)
+	log.Printf("Firehose monad: %#v", monadCfg)
 
 	srv.chReload <- true
 
@@ -93,6 +153,10 @@ func (srv *Server) Exit() {
 	srv.Lock()
 	srv.exiting = true
 	srv.Unlock()
+
+	if srv.monad != nil {
+		srv.monad.Exit()
+	}
 
 	close(srv.chReload)
 
