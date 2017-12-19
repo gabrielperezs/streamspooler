@@ -218,18 +218,22 @@ func (clt *Client) flush() {
 		}
 		clt.srv.failure()
 
-		// If there is an error and is a critical message, try again in 1 second
-		if clt.srv.cfg.Critical {
-			// Limit of tries
-			try++
-			if try > failureMaxTries {
-				log.Printf("Firehose client %s [%d]: ERROR Max retry, %d messages lost", clt.srv.cfg.StreamName, clt.ID, size)
-				return
-			}
-
-			// Wait for the next try
-			time.Sleep(failureWait)
+		// Finish if is not critical stream
+		if !clt.srv.cfg.Critical {
+			return
 		}
+
+		// Critical message will try again
+		// Limit of tries
+		try++
+		if try > failureMaxTries {
+			log.Printf("Firehose client %s [%d]: ERROR Max retry, %d messages lost", clt.srv.cfg.StreamName, clt.ID, size)
+			return
+		}
+
+		// Wait for the next try
+		time.Sleep(failureWait)
+
 	}
 }
 
