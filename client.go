@@ -187,7 +187,7 @@ func (clt *Client) flush() {
 		clt.batchSize = 0
 		clt.batch = nil
 		clt.count = 0
-		clt.records = clt.records[:0]
+		clt.records = nil
 	}()
 
 	try := 0
