@@ -23,8 +23,8 @@ const (
 )
 
 var (
-	clientCount int64 = 0
-	newLine           = []byte("\n")
+	clientCount int64
+	newLine     = []byte("\n")
 )
 
 var pool = &bytebufferpool.Pool{}
