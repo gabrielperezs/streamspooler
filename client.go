@@ -58,7 +58,9 @@ func NewClient(srv *Server) *Client {
 		srv:     srv,
 		ID:      n,
 		t:       time.NewTimer(recordsTimeout),
+		batch:   make([]*bytebufferpool.ByteBuffer, 0, maxBatchRecords),
 		records: make([]*firehose.Record, 0, maxBatchRecords),
+		buff:    pool.Get(),
 	}
 
 	if err := clt.Reload(); err != nil {
@@ -88,8 +90,6 @@ func (clt *Client) Reload() error {
 func (clt *Client) listen() {
 	clt.status = 1
 
-	clt.buff = pool.Get()
-
 	for {
 
 		select {
@@ -117,8 +117,8 @@ func (clt *Client) listen() {
 
 			// The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
 			if clt.count >= clt.srv.cfg.MaxRecords || len(clt.batch)+1 > maxBatchRecords || clt.batchSize+recordSize+1 >= maxBatchSize {
-				//log.Printf("flush: count %d/%d | batch %d/%d | size [%d] %d/%d",
-				//	clt.count, clt.srv.cfg.MaxRecords, len(clt.batch), maxBatchRecords, recordSize, (clt.batchSize+recordSize+1)/1024, maxBatchSize/1024)
+				// log.Printf("flush: count %d/%d | batch %d/%d | size [%d] %d/%d",
+				// 	clt.count, clt.srv.cfg.MaxRecords, len(clt.batch), maxBatchRecords, recordSize, (clt.batchSize+recordSize+1)/1024, maxBatchSize/1024)
 				// Force flush
 				clt.flush()
 			}
@@ -127,8 +127,8 @@ func (clt *Client) listen() {
 			if !clt.srv.cfg.ConcatRecords || clt.buff.Len()+recordSize+1 >= maxRecordSize || clt.count+1 > clt.srv.cfg.MaxRecords {
 				if clt.buff.Len() > 0 {
 					// Save in new record
-					c := clt.buff
-					clt.batch = append(clt.batch, c)
+					buff := clt.buff
+					clt.batch = append(clt.batch, buff)
 					clt.buff = pool.Get()
 				}
 			}
@@ -140,8 +140,8 @@ func (clt *Client) listen() {
 
 		case <-clt.t.C:
 			if clt.buff.Len() > 0 {
-				c := clt.buff
-				clt.batch = append(clt.batch, c)
+				buff := clt.buff
+				clt.batch = append(clt.batch, buff)
 				clt.buff = pool.Get()
 			}
 
@@ -178,39 +178,21 @@ func (clt *Client) flush() {
 		clt.records = append(clt.records, &firehose.Record{Data: b.B})
 	}
 
-	defer func() {
-		// Put slice bytes in the pull after sent
-		for _, b := range clt.batch {
-			pool.Put(b)
-		}
+	// Create the request
+	req, _ := clt.srv.awsSvc.PutRecordBatchRequest(&firehose.PutRecordBatchInput{
+		DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
+		Records:            clt.records,
+	})
 
-		clt.batchSize = 0
-		clt.batch = nil
-		clt.count = 0
-		clt.records = nil
-	}()
+	// Add context timeout to the request
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
 
-	try := 0
-	for {
+	req.SetContext(ctx)
 
-		// Create the request
-		req, _ := clt.srv.awsSvc.PutRecordBatchRequest(&firehose.PutRecordBatchInput{
-			DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
-			Records:            clt.records,
-		})
-
-		// Add context timeout to the request
-		ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
-		defer cancel()
-
-		req.SetContext(ctx)
-
-		// Send the request
-		err := req.Send()
-		if err == nil {
-			return
-		}
-
+	// Send the request
+	err := req.Send()
+	if err != nil {
 		if req.IsErrorThrottle() {
 			log.Printf("Firehose client %s [%d]: ERROR IsErrorThrottle: %s", clt.srv.cfg.StreamName, clt.ID, err)
 		} else {
@@ -219,22 +201,20 @@ func (clt *Client) flush() {
 		clt.srv.failure()
 
 		// Finish if is not critical stream
-		if !clt.srv.cfg.Critical {
-			return
+		if clt.srv.cfg.Critical {
+			log.Printf("Firehose client %s [%d]: ERROR Critical records lost, %d messages lost", clt.srv.cfg.StreamName, clt.ID, size)
 		}
-
-		// Critical message will try again
-		// Limit of tries
-		try++
-		if try > failureMaxTries {
-			log.Printf("Firehose client %s [%d]: ERROR Max retry, %d messages lost", clt.srv.cfg.StreamName, clt.ID, size)
-			return
-		}
-
-		// Wait for the next try
-		time.Sleep(failureWait)
-
 	}
+
+	// Put slice bytes in the pull after sent
+	for _, b := range clt.batch {
+		pool.Put(b)
+	}
+
+	clt.batchSize = 0
+	clt.count = 0
+	clt.batch = nil
+	clt.records = nil
 }
 
 // Exit finish the go routine of the client

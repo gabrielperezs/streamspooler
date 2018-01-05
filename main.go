@@ -99,6 +99,10 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		srv.cfg.CoolDownPeriod = defaultCoolDownPeriod
 	}
 
+	if srv.cfg.MaxRecords == 0 {
+		srv.cfg.MaxRecords = defaultMaxRecords
+	}
+
 	monadCfg := &monad.Config{
 		Min:            uint64(1),
 		Max:            uint64(srv.cfg.MaxWorkers),
@@ -136,7 +140,6 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	}
 
 	log.Printf("Firehose config: %#v", srv.cfg)
-	log.Printf("Firehose monad: %#v", monadCfg)
 
 	srv.chReload <- true
 
