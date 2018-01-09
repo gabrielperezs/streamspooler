@@ -136,12 +136,15 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	if srv.monad == nil {
 		srv.monad = monad.New(monadCfg)
 	} else {
-		srv.monad.Reload(monadCfg)
+		go srv.monad.Reload(monadCfg)
 	}
 
 	log.Printf("Firehose config: %#v", srv.cfg)
 
-	srv.chReload <- true
+	select {
+	case srv.chReload <- true:
+	default:
+	}
 
 	return nil
 }
