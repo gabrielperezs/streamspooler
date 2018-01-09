@@ -55,7 +55,10 @@ func (srv *Server) failure() {
 	log.Printf("Firehose: %d errors detected", srv.errors)
 
 	if srv.errors > maxErrors {
-		srv.chReload <- true
+		select {
+		case srv.chReload <- true:
+		default:
+		}
 	}
 }
 
