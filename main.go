@@ -51,7 +51,6 @@ type Server struct {
 
 	chReload chan bool
 	chDone   chan bool
-	failing  bool
 	reseting bool
 	exiting  bool
 

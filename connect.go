@@ -23,10 +23,6 @@ func (srv *Server) _reload() {
 			continue
 		}
 
-		srv.Lock()
-		srv.failing = true
-		srv.Unlock()
-
 		if err := srv.clientsReset(); err != nil {
 			log.Printf("Firehose ERROR: can't connect to kinesis: %s", err)
 			time.Sleep(connectionRetry)
@@ -111,8 +107,6 @@ func (srv *Server) clientsReset() (err error) {
 	defer func() {
 		log.Printf("Firehose %s clients %d, in the queue %d/%d", srv.cfg.StreamName, len(srv.clients), len(srv.C), cap(srv.C))
 	}()
-
-	srv.failing = false
 
 	currClients := len(srv.clients)
 
