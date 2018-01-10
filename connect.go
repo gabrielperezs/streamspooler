@@ -58,9 +58,6 @@ func (srv *Server) clientsReset() (err error) {
 	srv.Lock()
 	defer srv.Unlock()
 
-	srv.reseting = true
-	defer func() { srv.reseting = false }()
-
 	if srv.errors == 0 && srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
 		log.Printf("Firehose Reload config to the stream %s", srv.cfg.StreamName)
 
