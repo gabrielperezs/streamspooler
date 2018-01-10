@@ -117,10 +117,11 @@ func (srv *Server) clientsReset() (err error) {
 
 	// If the config define lower number than the active clients remove the difference
 	if currClients > srv.cliDesired {
-		for i := currClients; i > srv.cliDesired; i-- {
-			k := i - 1
-			srv.clients[k].Exit()
-			srv.clients = append(srv.clients[:k], srv.clients[k+1:]...)
+		toExit := currClients - srv.cliDesired
+		for i := 0; i < toExit; i++ {
+			srv.clients[0].Exit()
+			srv.clients[0] = nil
+			srv.clients = srv.clients[1:]
 		}
 	} else {
 		// If the config define higher number than the active clients start new clients

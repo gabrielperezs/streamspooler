@@ -47,7 +47,7 @@ type Client struct {
 	lastFlushed time.Time
 }
 
-// NewClient creates a new client that connect to a Redis server
+// NewClient creates a new client that connects to a Firehose
 func NewClient(srv *Server) *Client {
 	n := atomic.AddInt64(&clientCount, 1)
 
