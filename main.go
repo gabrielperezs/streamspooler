@@ -129,7 +129,10 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		},
 		DesireFn: func(n uint64) {
 			srv.cliDesired = int(n)
-			srv.chReload <- true
+			select {
+			case srv.chReload <- true:
+			default:
+			}
 		},
 	}
 
