@@ -67,6 +67,7 @@ func New(cfg Config) *Server {
 	srv := &Server{
 		chDone:   make(chan bool),
 		chReload: make(chan bool),
+		C: make(chan []byte, cfg.Buffer),
 	}
 
 	go srv._reload()

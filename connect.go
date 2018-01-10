@@ -23,10 +23,6 @@ func (srv *Server) _reload() {
 			continue
 		}
 
-		if srv.C == nil {
-			srv.C = make(chan []byte, srv.cfg.Buffer)
-		}
-
 		srv.Lock()
 		srv.failing = true
 		srv.Unlock()
