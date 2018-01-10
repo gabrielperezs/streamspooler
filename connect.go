@@ -116,7 +116,7 @@ func (srv *Server) clientsReset() (err error) {
 	if currClients > srv.cliDesired {
 		toExit := currClients - srv.cliDesired
 		for i := 0; i < toExit; i++ {
-			srv.clients[0].Exit()
+			go srv.clients[0].Exit() // Don't block waiting for the client to flush
 			srv.clients[0] = nil
 			srv.clients = srv.clients[1:]
 		}

@@ -41,6 +41,7 @@ type Client struct {
 	records     []*firehose.Record
 	status      int
 	done        chan bool
+	finish      chan bool
 	ID          int64
 	t           *time.Timer
 	lastFlushed time.Time
@@ -52,6 +53,7 @@ func NewClient(srv *Server) *Client {
 
 	clt := &Client{
 		done:    make(chan bool),
+		finish:  make(chan bool),
 		status:  0,
 		srv:     srv,
 		ID:      n,
@@ -142,10 +144,17 @@ func (clt *Client) listen() {
 				clt.batch = append(clt.batch, buff)
 				clt.buff = pool.Get()
 			}
-
 			clt.flush()
 
-		case <-clt.done:
+		case <-clt.finish:
+			//Stop and drain the timer channel
+			if !clt.t.Stop() {
+				select {
+				case <-clt.t.C:
+				default:
+				}
+			}
+
 			if clt.buff.Len() > 0 {
 				clt.batch = append(clt.batch, clt.buff)
 			}
@@ -157,6 +166,7 @@ func (clt *Client) listen() {
 			}
 
 			log.Printf("Firehose client %s [%d]: Exit", clt.srv.cfg.StreamName, clt.ID)
+			clt.done <- true
 			return
 		}
 	}
@@ -225,5 +235,6 @@ func (clt *Client) flush() {
 
 // Exit finish the go routine of the client
 func (clt *Client) Exit() {
-	clt.done <- true
+	clt.finish <- true
+	<-clt.done
 }
