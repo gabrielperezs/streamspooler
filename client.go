@@ -39,7 +39,6 @@ type Client struct {
 	batch       []*bytebufferpool.ByteBuffer
 	batchSize   int
 	records     []*firehose.Record
-	status      int
 	done        chan bool
 	finish      chan bool
 	ID          int64
@@ -54,7 +53,6 @@ func NewClient(srv *Server) *Client {
 	clt := &Client{
 		done:    make(chan bool),
 		finish:  make(chan bool),
-		status:  0,
 		srv:     srv,
 		ID:      n,
 		t:       time.NewTimer(recordsTimeout),
@@ -63,33 +61,13 @@ func NewClient(srv *Server) *Client {
 		buff:    pool.Get(),
 	}
 
-	if err := clt.Reload(); err != nil {
-		log.Printf("Firehose client %d ERROR: reload %s", clt.ID, err)
-		return nil
-	}
-
-	log.Printf("Firehose client %s [%d]: ready", clt.srv.cfg.StreamName, clt.ID)
+	go clt.listen()
 
 	return clt
 }
 
-// Reload finish the listener and run it again
-func (clt *Client) Reload() error {
-	clt.Lock()
-	defer clt.Unlock()
-
-	if clt.status > 0 {
-		clt.Exit()
-	}
-
-	go clt.listen()
-
-	return nil
-}
-
 func (clt *Client) listen() {
-	clt.status = 1
-
+	log.Printf("Firehose client %s [%d]: ready", clt.srv.cfg.StreamName, clt.ID)
 	for {
 
 		select {
