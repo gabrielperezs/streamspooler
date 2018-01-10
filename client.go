@@ -40,7 +40,6 @@ type Client struct {
 	batchSize   int
 	records     []*firehose.Record
 	status      int
-	finish      chan bool
 	done        chan bool
 	ID          int64
 	t           *time.Timer
@@ -53,7 +52,6 @@ func NewClient(srv *Server) *Client {
 
 	clt := &Client{
 		done:    make(chan bool),
-		finish:  make(chan bool),
 		status:  0,
 		srv:     srv,
 		ID:      n,
@@ -148,9 +146,17 @@ func (clt *Client) listen() {
 			clt.flush()
 
 		case <-clt.done:
-			//log.Printf("Firehose client %s [%d]: closing..", clt.srv.cfg.StreamName, clt.ID)
+			if clt.buff.Len() > 0 {
+				clt.batch = append(clt.batch, clt.buff)
+			}
+
 			clt.flush()
-			clt.finish <- true
+			if l := len(clt.batch); l > 0 {
+				log.Printf("Firehose client %s [%d]: Exit, %d records lost", clt.srv.cfg.StreamName, clt.ID, l)
+				return
+			}
+
+			log.Printf("Firehose client %s [%d]: Exit", clt.srv.cfg.StreamName, clt.ID)
 			return
 		}
 	}
@@ -220,20 +226,4 @@ func (clt *Client) flush() {
 // Exit finish the go routine of the client
 func (clt *Client) Exit() {
 	clt.done <- true
-	<-clt.finish
-
-	if clt.buff.Len() > 0 {
-		c := clt.buff
-		clt.batch = append(clt.batch, c)
-		clt.buff = pool.Get()
-	}
-
-	clt.flush()
-
-	if l := len(clt.batch); l > 0 {
-		log.Printf("Firehose client %s [%d]: Exit, %d records lost", clt.srv.cfg.StreamName, clt.ID, l)
-		return
-	}
-
-	log.Printf("Firehose client %s [%d]: Exit", clt.srv.cfg.StreamName, clt.ID)
 }
