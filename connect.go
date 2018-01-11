@@ -23,14 +23,6 @@ func (srv *Server) _reload() {
 			continue
 		}
 
-		if srv.C == nil {
-			srv.C = make(chan []byte, srv.cfg.Buffer)
-		}
-
-		srv.Lock()
-		srv.failing = true
-		srv.Unlock()
-
 		if err := srv.clientsReset(); err != nil {
 			log.Printf("Firehose ERROR: can't connect to kinesis: %s", err)
 			time.Sleep(connectionRetry)
@@ -65,9 +57,6 @@ func (srv *Server) failure() {
 func (srv *Server) clientsReset() (err error) {
 	srv.Lock()
 	defer srv.Unlock()
-
-	srv.reseting = true
-	defer func() { srv.reseting = false }()
 
 	if srv.errors == 0 && srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
 		log.Printf("Firehose Reload config to the stream %s", srv.cfg.StreamName)
@@ -116,8 +105,6 @@ func (srv *Server) clientsReset() (err error) {
 		log.Printf("Firehose %s clients %d, in the queue %d/%d", srv.cfg.StreamName, len(srv.clients), len(srv.C), cap(srv.C))
 	}()
 
-	srv.failing = false
-
 	currClients := len(srv.clients)
 
 	// No changes in the number of clients
@@ -127,10 +114,11 @@ func (srv *Server) clientsReset() (err error) {
 
 	// If the config define lower number than the active clients remove the difference
 	if currClients > srv.cliDesired {
-		for i := currClients; i > srv.cliDesired; i-- {
-			k := i - 1
-			srv.clients[k].Exit()
-			srv.clients = append(srv.clients[:k], srv.clients[k+1:]...)
+		toExit := currClients - srv.cliDesired
+		for i := 0; i < toExit; i++ {
+			go srv.clients[0].Exit() // Don't block waiting for the client to flush
+			srv.clients[0] = nil
+			srv.clients = srv.clients[1:]
 		}
 	} else {
 		// If the config define higher number than the active clients start new clients

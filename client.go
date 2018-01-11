@@ -39,22 +39,20 @@ type Client struct {
 	batch       []*bytebufferpool.ByteBuffer
 	batchSize   int
 	records     []*firehose.Record
-	status      int
-	finish      chan bool
 	done        chan bool
+	finish      chan bool
 	ID          int64
 	t           *time.Timer
 	lastFlushed time.Time
 }
 
-// NewClient creates a new client that connect to a Redis server
+// NewClient creates a new client that connects to a Firehose
 func NewClient(srv *Server) *Client {
 	n := atomic.AddInt64(&clientCount, 1)
 
 	clt := &Client{
 		done:    make(chan bool),
 		finish:  make(chan bool),
-		status:  0,
 		srv:     srv,
 		ID:      n,
 		t:       time.NewTimer(recordsTimeout),
@@ -63,33 +61,13 @@ func NewClient(srv *Server) *Client {
 		buff:    pool.Get(),
 	}
 
-	if err := clt.Reload(); err != nil {
-		log.Printf("Firehose client %d ERROR: reload %s", clt.ID, err)
-		return nil
-	}
-
-	log.Printf("Firehose client %s [%d]: ready", clt.srv.cfg.StreamName, clt.ID)
+	go clt.listen()
 
 	return clt
 }
 
-// Reload finish the listener and run it again
-func (clt *Client) Reload() error {
-	clt.Lock()
-	defer clt.Unlock()
-
-	if clt.status > 0 {
-		clt.Exit()
-	}
-
-	go clt.listen()
-
-	return nil
-}
-
 func (clt *Client) listen() {
-	clt.status = 1
-
+	log.Printf("Firehose client %s [%d]: ready", clt.srv.cfg.StreamName, clt.ID)
 	for {
 
 		select {
@@ -144,13 +122,29 @@ func (clt *Client) listen() {
 				clt.batch = append(clt.batch, buff)
 				clt.buff = pool.Get()
 			}
-
 			clt.flush()
 
-		case <-clt.done:
-			//log.Printf("Firehose client %s [%d]: closing..", clt.srv.cfg.StreamName, clt.ID)
+		case <-clt.finish:
+			//Stop and drain the timer channel
+			if !clt.t.Stop() {
+				select {
+				case <-clt.t.C:
+				default:
+				}
+			}
+
+			if clt.buff.Len() > 0 {
+				clt.batch = append(clt.batch, clt.buff)
+			}
+
 			clt.flush()
-			clt.finish <- true
+			if l := len(clt.batch); l > 0 {
+				log.Printf("Firehose client %s [%d]: Exit, %d records lost", clt.srv.cfg.StreamName, clt.ID, l)
+				return
+			}
+
+			log.Printf("Firehose client %s [%d]: Exit", clt.srv.cfg.StreamName, clt.ID)
+			clt.done <- true
 			return
 		}
 	}
@@ -219,21 +213,6 @@ func (clt *Client) flush() {
 
 // Exit finish the go routine of the client
 func (clt *Client) Exit() {
-	clt.done <- true
-	<-clt.finish
-
-	if clt.buff.Len() > 0 {
-		c := clt.buff
-		clt.batch = append(clt.batch, c)
-		clt.buff = pool.Get()
-	}
-
-	clt.flush()
-
-	if l := len(clt.batch); l > 0 {
-		log.Printf("Firehose client %s [%d]: Exit, %d records lost", clt.srv.cfg.StreamName, clt.ID, l)
-		return
-	}
-
-	log.Printf("Firehose client %s [%d]: Exit", clt.srv.cfg.StreamName, clt.ID)
+	clt.finish <- true
+	<-clt.done
 }

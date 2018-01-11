@@ -51,8 +51,6 @@ type Server struct {
 
 	chReload chan bool
 	chDone   chan bool
-	failing  bool
-	reseting bool
 	exiting  bool
 
 	awsSvc         *firehose.Firehose
@@ -67,6 +65,7 @@ func New(cfg Config) *Server {
 	srv := &Server{
 		chDone:   make(chan bool),
 		chReload: make(chan bool),
+		C:        make(chan []byte, cfg.Buffer),
 	}
 
 	go srv._reload()
