@@ -71,7 +71,18 @@ func (clt *Client) listen() {
 	for {
 
 		select {
-		case r := <-clt.srv.C:
+		case ri := <-clt.srv.C:
+
+			var r []byte
+			if clt.srv.cfg.Serializer != nil {
+				var err error
+				if r, err = clt.srv.cfg.Serializer(ri); err != nil {
+					log.Printf("Firehose client %s [%d]: ERROR serializer: %s", clt.srv.cfg.StreamName, clt.ID, err)
+					continue
+				}
+			} else {
+				r = ri.([]byte)
+			}
 
 			recordSize := len(r)
 

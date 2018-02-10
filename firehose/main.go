@@ -26,6 +26,7 @@ type Config struct {
 	Interval        time.Duration
 	CoolDownPeriod  time.Duration
 	Critical        bool // Handle this stream as critical
+	Serializer      func(i interface{}) ([]byte, error)
 
 	// Limits
 	Buffer        int
@@ -43,7 +44,7 @@ type Server struct {
 	sync.Mutex
 
 	cfg        Config
-	C          chan []byte
+	C          chan interface{}
 	clients    []*Client
 	cliDesired int
 
@@ -65,7 +66,7 @@ func New(cfg Config) *Server {
 	srv := &Server{
 		chDone:   make(chan bool),
 		chReload: make(chan bool),
-		C:        make(chan []byte, cfg.Buffer),
+		C:        make(chan interface{}, cfg.Buffer),
 	}
 
 	go srv._reload()
