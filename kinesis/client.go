@@ -2,10 +2,13 @@ package kinesisPool
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/spaolacci/murmur3"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/kinesis"
@@ -180,9 +183,10 @@ func (clt *Client) flush() {
 
 	// Create slice with the struct need by Kinesis
 	for _, b := range clt.batch {
+		m1 := murmur3.Sum64(b.B)
 		clt.records = append(clt.records, &kinesis.PutRecordsRequestEntry{
 			Data:         b.B,
-			PartitionKey: aws.String(RandStringRunes(12)),
+			PartitionKey: aws.String(fmt.Sprintf("%02x", m1)),
 		})
 	}
 

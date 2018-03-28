@@ -2,7 +2,6 @@ package kinesisPool
 
 import (
 	"log"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -59,20 +58,6 @@ type Server struct {
 	lastConnection time.Time
 	lastError      time.Time
 	errors         int64
-}
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
-
-var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
-func RandStringRunes(n int) string {
-	b := make([]rune, n)
-	for i := range b {
-		b[i] = letterRunes[rand.Intn(len(letterRunes))]
-	}
-	return string(b)
 }
 
 // New create a pool of workers
