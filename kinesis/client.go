@@ -17,12 +17,12 @@ import (
 )
 
 const (
-	recordsTimeout  = 15 * time.Second
-	maxRecordSize   = 1000 * 1024     // The maximum size of a record sent to Kinesis Kinesis, before base64-encoding, is 1000 KB
-	maxBatchRecords = 500             // The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
-	maxBatchSize    = 4 * 1024 * 1024 // 4 MB per call
-	failureWait     = 1 * time.Second
-	failureMaxTries = 3
+	recordsTimeout     = 15 * time.Second
+	maxRecordSize      = 1000 * 1024     // The maximum size of a record sent to Kinesis Kinesis, before base64-encoding, is 1000 KB
+	maxBatchRecords    = 500             // The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
+	maxBatchSize       = 4 * 1024 * 1024 // 4 MB per call
+	partialFailureWait = 200 * time.Millisecond
+	retryMessageRetry  = 100 * time.Millisecond
 )
 
 var (
@@ -211,6 +211,7 @@ func (clt *Client) flush() {
 	} else {
 		if *output.FailedRecordCount > 0 {
 			log.Printf("Kinesis client %s [%d]: partial failed, %d sent back to the buffer", clt.srv.cfg.StreamName, clt.ID, *output.FailedRecordCount)
+
 			// From oficial package comments:
 			//
 			// PutRecords results.
@@ -220,7 +221,6 @@ func (clt *Client) flush() {
 			// to a stream includes SequenceNumber and ShardId in the result. A record that
 			// fails to be added to a stream includes ErrorCode and ErrorMessage in the
 			// result.
-			//
 			for i, r := range output.Records {
 				if *r.ErrorCode != "" {
 					// Every message with error code means that message wasn't stored by Kinesis
@@ -229,10 +229,14 @@ func (clt *Client) flush() {
 					// and send to the main channel in a goroutine in order to don't block the
 					// operation if the channel is full.
 					go func(b []byte) {
-						clt.srv.C <- append([]byte(""), b...)
-					}(clt.batch[i].B)
+						time.Sleep(retryMessageRetry)
+						clt.srv.C <- b
+					}(append([]byte(""), clt.batch[i].B...))
 				}
 			}
+
+			// Sleep few millisecond because the partial failure
+			time.Sleep(partialFailureWait)
 		}
 	}
 
