@@ -195,7 +195,7 @@ func (clt *Client) flush() {
 	defer cancel()
 
 	// Create the request
-	if _, err := clt.srv.awsSvc.PutRecordsWithContext(ctx, &kinesis.PutRecordsInput{
+	if output, err := clt.srv.awsSvc.PutRecordsWithContext(ctx, &kinesis.PutRecordsInput{
 		StreamName: aws.String(clt.srv.cfg.StreamName),
 		Records:    clt.records,
 	}); err != nil {
@@ -207,6 +207,32 @@ func (clt *Client) flush() {
 		// Finish if is not critical stream
 		if clt.srv.cfg.Critical {
 			log.Printf("Kinesis client %s [%d]: ERROR Critical records lost, %d messages lost", clt.srv.cfg.StreamName, clt.ID, size)
+		}
+	} else {
+		if *output.FailedRecordCount > 0 {
+			log.Printf("Kinesis client %s [%d]: partial failed, %d sent back to the buffer", clt.srv.cfg.StreamName, clt.ID, *output.FailedRecordCount)
+			// From oficial package comments:
+			//
+			// PutRecords results.
+			// Please also see https://docs.aws.amazon.com/goto/WebAPI/kinesis-2013-12-02/PutRecordsOutput
+			// An array of successfully and unsuccessfully processed record results, correlated
+			// with the request by natural ordering. A record that is successfully added
+			// to a stream includes SequenceNumber and ShardId in the result. A record that
+			// fails to be added to a stream includes ErrorCode and ErrorMessage in the
+			// result.
+			//
+			for i, r := range output.Records {
+				if *r.ErrorCode != "" {
+					// Every message with error code means that message wasn't stored by Kinesis
+					// stream. We send back to the main channel every failed message. To be sure
+					// that we don't have problems with sync.pool the slice of bytes are copied
+					// and send to the main channel in a goroutine in order to don't block the
+					// operation if the channel is full.
+					go func(b []byte) {
+						clt.srv.C <- append([]byte(""), b...)
+					}(clt.batch[i].B)
+				}
+			}
 		}
 	}
 
