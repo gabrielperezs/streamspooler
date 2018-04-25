@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/gabrielperezs/firehose-pool"
+	"github.com/gabrielperezs/streamspooler/firehose"
 	"github.com/pquerna/ffjson/ffjson"
 )
 
