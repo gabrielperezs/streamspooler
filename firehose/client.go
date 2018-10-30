@@ -220,11 +220,8 @@ func (clt *Client) flush() {
 					clt.srv.cfg.StreamName, clt.ID, onFlyRetryLimit, err)
 				continue
 			}
-			go func(b []byte) {
-				atomic.AddInt64(&clt.onFlyRetry, 1)
-				defer atomic.AddInt64(&clt.onFlyRetry, -1)
-				clt.srv.C <- b
-			}(append([]byte(nil), clt.batch[i].B...))
+			// Sending back to channel, it will run a goroutine
+			clt.retry(clt.batch[i].B)
 		}
 	} else if *output.FailedPutCount > 0 {
 		log.Printf("Firehose client %s [%d]: partial failed, %d sent back to the buffer", clt.srv.cfg.StreamName, clt.ID, *output.FailedPutCount)
@@ -247,11 +244,8 @@ func (clt *Client) flush() {
 				log.Printf("Firehose client %s [%d]: ERROR in AWS: %s - %s", clt.srv.cfg.StreamName, clt.ID, *r.ErrorCode, *r.ErrorMessage)
 			}
 
-			go func(b []byte) {
-				atomic.AddInt64(&clt.onFlyRetry, 1)
-				defer atomic.AddInt64(&clt.onFlyRetry, -1)
-				clt.srv.C <- b
-			}(append([]byte(nil), clt.batch[i].B...))
+			// Sending back to channel, it will run a goroutine
+			clt.retry(clt.batch[i].B)
 		}
 	}
 
@@ -270,4 +264,16 @@ func (clt *Client) flush() {
 func (clt *Client) Exit() {
 	clt.finish <- true
 	<-clt.done
+}
+
+func (clt *Client) retry(orig []byte) {
+	// Remove the last newLine
+	b := make([]byte, len(orig)-len(newLine))
+	copy(b, orig[:len(orig)-len(newLine)])
+
+	go func(b []byte) {
+		atomic.AddInt64(&clt.onFlyRetry, 1)
+		defer atomic.AddInt64(&clt.onFlyRetry, -1)
+		clt.srv.C <- b
+	}(b)
 }
