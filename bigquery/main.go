@@ -1,11 +1,11 @@
-package pubsubPool
+package bigqueryPool
 
 import (
 	"log"
 	"sync"
 	"time"
 
-	"cloud.google.com/go/pubsub"
+	"cloud.google.com/go/bigquery"
 	"github.com/gabrielperezs/monad"
 )
 
@@ -29,14 +29,13 @@ type Config struct {
 	Serializer      func(i interface{}) ([]byte, error)
 
 	// Limits
-	Buffer        int
-	ConcatRecords bool // Contact many rows in one PubSub record
-	MaxRecords    int  // To send in batch to Kinesis
-	Compress      bool // Compress records with snappy
+	Buffer     int
+	MaxRecords int
+	Project    string
+	TableName  string
+	DataSet    string
 
 	// GCE Authentication and enpoints
-	Project            string // PubSub project name
-	Topic              string // PubSub topic
 	GCEAPIKey          string // GCE API Key
 	GCECredentialsFile string // GCE Credential file
 }
@@ -55,7 +54,7 @@ type Server struct {
 	chDone   chan bool
 	exiting  bool
 
-	pubsubCli      *pubsub.Client
+	bigqueryCli    *bigquery.Client
 	lastConnection time.Time
 	lastError      time.Time
 	errors         int64
@@ -141,7 +140,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		go srv.monad.Reload(monadCfg)
 	}
 
-	log.Printf("PubSub config: %#v", srv.cfg)
+	log.Printf("BigQuery config: %#v", srv.cfg)
 
 	select {
 	case srv.chReload <- true:
@@ -169,13 +168,13 @@ func (srv *Server) Exit() {
 	}
 
 	if len(srv.C) > 0 {
-		log.Printf("PubSub: messages lost %d", len(srv.C))
+		log.Printf("BigQuery: messages lost %d", len(srv.C))
 	}
+
 	close(srv.C)
 
 	// finishing the server
 	srv.chDone <- true
-	log.Printf("PubSub: exiting")
 }
 
 func (srv *Server) isExiting() bool {

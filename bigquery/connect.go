@@ -1,11 +1,11 @@
-package pubsubPool
+package bigqueryPool
 
 import (
 	"context"
 	"log"
 	"time"
 
-	"cloud.google.com/go/pubsub"
+	"cloud.google.com/go/bigquery"
 	"google.golang.org/api/option"
 )
 
@@ -24,7 +24,7 @@ func (srv *Server) _reload() {
 		}
 
 		if err := srv.clientsReset(); err != nil {
-			log.Printf("PubSub ERROR: can't connect: %s", err)
+			log.Printf("BigQuery ERROR: can't connect: %s", err)
 			time.Sleep(connectionRetry)
 		}
 	}
@@ -44,7 +44,7 @@ func (srv *Server) failure() {
 
 	srv.errors++
 	srv.lastError = time.Now()
-	log.Printf("PubSub: %d errors detected", srv.errors)
+	log.Printf("BigQuery: %d errors detected", srv.errors)
 
 	if srv.errors > maxErrors {
 		select {
@@ -59,7 +59,7 @@ func (srv *Server) clientsReset() (err error) {
 	defer srv.Unlock()
 
 	if srv.errors == 0 && srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
-		log.Printf("PubSub Reload config to the stream %s", srv.cfg.Project)
+		log.Printf("BigQuery Reload config to the stream %s", srv.cfg.DataSet)
 
 		ctx := context.Background()
 		var authClientOption option.ClientOption
@@ -71,22 +71,22 @@ func (srv *Server) clientsReset() (err error) {
 		}
 
 		var err error
-		srv.pubsubCli, err = pubsub.NewClient(ctx, srv.cfg.Project, authClientOption)
+		srv.bigqueryCli, err = bigquery.NewClient(ctx, srv.cfg.Project, authClientOption)
 		if err != nil {
-			log.Printf("PubSub ERROR: session: %s", err)
+			log.Printf("BigQuery ERROR: session: %s", err)
 
 			srv.errors++
 			srv.lastError = time.Now()
 			return err
 		}
 
-		log.Printf("PubSub Connected to %s", srv.cfg.Project)
+		log.Printf("BigQuery Connected to %s", srv.cfg.Project)
 		srv.lastConnection = time.Now()
 		srv.errors = 0
 	}
 
 	defer func() {
-		log.Printf("PubSub %s clients %d, in the queue %d/%d", srv.cfg.Project, len(srv.clients), len(srv.C), cap(srv.C))
+		log.Printf("BigQuery %s clients %d, in the queue %d/%d", srv.cfg.Project, len(srv.clients), len(srv.C), cap(srv.C))
 	}()
 
 	currClients := len(srv.clients)

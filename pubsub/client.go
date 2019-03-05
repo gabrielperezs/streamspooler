@@ -185,9 +185,7 @@ func (clt *Client) flush() {
 	}
 
 	// Add context timeout to the request
-	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
-	defer cancel()
-
+	ctx := context.Background()
 	for _, b := range clt.batch {
 		// [START pubsub_publish]
 		// [START pubsub_quickstart_publisher]
@@ -197,12 +195,12 @@ func (clt *Client) flush() {
 		})
 		// Block until the result is returned and a server-generated
 		// ID is returned for the published message.
-		id, err := result.Get(ctx)
+		_, err := result.Get(ctx)
 		if err != nil {
 			log.Printf("Error: %s", err)
 			return
 		}
-		log.Printf("PubSub client %s [%d]: Published a message; msg ID: %v", clt.srv.cfg.Project, clt.ID, id)
+		//log.Printf("PubSub client %s [%d]: Published a message; msg ID: %v", clt.srv.cfg.Project, clt.ID, id)
 	}
 
 	// Put slice bytes in the pull after sent

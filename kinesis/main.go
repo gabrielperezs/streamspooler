@@ -64,8 +64,8 @@ type Server struct {
 func New(cfg Config) *Server {
 
 	srv := &Server{
-		chDone:   make(chan bool),
-		chReload: make(chan bool),
+		chDone:   make(chan bool, 1),
+		chReload: make(chan bool, 1),
 		C:        make(chan interface{}, cfg.Buffer),
 	}
 
