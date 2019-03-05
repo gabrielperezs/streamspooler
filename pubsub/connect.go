@@ -3,6 +3,7 @@ package pubsubPool
 import (
 	"context"
 	"log"
+	"runtime"
 	"time"
 
 	"cloud.google.com/go/pubsub"
@@ -78,6 +79,14 @@ func (srv *Server) clientsReset() (err error) {
 			srv.errors++
 			srv.lastError = time.Now()
 			return err
+		}
+
+		srv.topicCli = srv.pubsubCli.Topic(srv.cfg.Topic)
+		srv.topicCli.PublishSettings = pubsub.PublishSettings{
+			ByteThreshold:  5000,
+			CountThreshold: 10,
+			DelayThreshold: 100 * time.Millisecond,
+			NumGoroutines:  runtime.NumCPU(),
 		}
 
 		log.Printf("PubSub Connected to %s", srv.cfg.Project)

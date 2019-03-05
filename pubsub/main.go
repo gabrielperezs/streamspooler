@@ -56,6 +56,7 @@ type Server struct {
 	exiting  bool
 
 	pubsubCli      *pubsub.Client
+	topicCli       *pubsub.Topic
 	lastConnection time.Time
 	lastError      time.Time
 	errors         int64
@@ -107,7 +108,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	monadCfg := &monad.Config{
 		Min:            uint64(1),
 		Max:            uint64(srv.cfg.MaxWorkers),
-		Interval:       srv.cfg.Interval,
+		Interval:       100 * time.Millisecond,
 		CoolDownPeriod: srv.cfg.CoolDownPeriod,
 		WarmFn: func() bool {
 			if srv.cliDesired == 0 {
@@ -120,7 +121,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 			}
 
 			currPtc := (l / float64(cap(srv.C))) * 100
-
+			//log.Printf("Desired: %d, Len: %g, Ptc: %v", srv.cliDesired, l, currPtc)
 			if currPtc > srv.cfg.ThresholdWarmUp*100 {
 				return true
 			}

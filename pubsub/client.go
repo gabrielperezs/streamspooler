@@ -14,9 +14,9 @@ import (
 
 const (
 	recordsTimeout  = 15 * time.Second
-	maxRecordSize   = 1000 * 1000 // The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1000 KB
-	maxBatchRecords = 500         // The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
-	maxBatchSize    = 3 << 20     // 4 MiB per call
+	maxRecordSize   = 1000 * 1000
+	maxBatchRecords = 100
+	maxBatchSize    = 3 << 20 // 4 MiB per call
 
 	partialFailureWait = 200 * time.Millisecond
 	globalFailureWait  = 500 * time.Millisecond
@@ -73,7 +73,6 @@ func (clt *Client) listen() {
 
 		select {
 		case ri := <-clt.srv.C:
-
 			var r []byte
 			if clt.srv.cfg.Serializer != nil {
 				var err error
@@ -105,11 +104,7 @@ func (clt *Client) listen() {
 
 			clt.count++
 
-			// The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
-			if clt.count >= clt.srv.cfg.MaxRecords || len(clt.batch) >= maxBatchRecords || clt.batchSize+recordSize+1 >= maxBatchSize {
-				// log.Printf("flush: count %d/%d | batch %d/%d | size [%d] %d/%d",
-				// 	clt.count, clt.srv.cfg.MaxRecords, len(clt.batch), maxBatchRecords, recordSize, (clt.batchSize+recordSize+1)/1024, maxBatchSize/1024)
-				// Force flush
+			if clt.count >= clt.srv.cfg.MaxRecords || len(clt.batch) >= maxBatchRecords {
 				clt.flush()
 			}
 
@@ -128,7 +123,7 @@ func (clt *Client) listen() {
 
 			clt.batchSize += clt.buff.Len()
 
-			if len(clt.batch)+1 >= maxBatchRecords || clt.batchSize >= maxBatchSize {
+			if len(clt.batch)+1 >= maxBatchRecords {
 				clt.flush()
 			}
 
@@ -187,10 +182,7 @@ func (clt *Client) flush() {
 	// Add context timeout to the request
 	ctx := context.Background()
 	for _, b := range clt.batch {
-		// [START pubsub_publish]
-		// [START pubsub_quickstart_publisher]
-		t := clt.srv.pubsubCli.Topic(clt.srv.cfg.Topic)
-		result := t.Publish(ctx, &pubsub.Message{
+		result := clt.srv.topicCli.Publish(ctx, &pubsub.Message{
 			Data: b.B,
 		})
 		// Block until the result is returned and a server-generated
