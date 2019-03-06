@@ -11,7 +11,7 @@ import (
 
 const (
 	defaultBufferSize      = 1024
-	defaultWorkers         = 1
+	defaultMinWorkers      = 2
 	defaultMaxWorkers      = 10
 	defaultMaxRecords      = 500
 	defaultThresholdWarmUp = 0.6
@@ -21,6 +21,7 @@ const (
 // Config is the general configuration for the server
 type Config struct {
 	// Internal clients details
+	MinWorkers      int
 	MaxWorkers      int
 	ThresholdWarmUp float64
 	Interval        time.Duration
@@ -56,7 +57,6 @@ type Server struct {
 	exiting  bool
 
 	pubsubCli      *pubsub.Client
-	topicCli       *pubsub.Topic
 	lastConnection time.Time
 	lastError      time.Time
 	errors         int64
@@ -101,19 +101,25 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		srv.cfg.CoolDownPeriod = defaultCoolDownPeriod
 	}
 
+	if srv.cfg.MinWorkers == 0 {
+		srv.cfg.MinWorkers = defaultMinWorkers
+	}
+
 	if srv.cfg.MaxRecords == 0 {
 		srv.cfg.MaxRecords = defaultMaxRecords
 	}
 
 	monadCfg := &monad.Config{
-		Min:            uint64(1),
+		Min:            uint64(srv.cfg.MinWorkers),
 		Max:            uint64(srv.cfg.MaxWorkers),
-		Interval:       100 * time.Millisecond,
+		Interval:       500 * time.Millisecond,
 		CoolDownPeriod: srv.cfg.CoolDownPeriod,
 		WarmFn: func() bool {
 			if srv.cliDesired == 0 {
 				return true
 			}
+
+			//log.Printf("--------------- Desired: %d, Len: %d/%d", srv.cliDesired, len(srv.C), cap(srv.C))
 
 			l := float64(len(srv.C))
 			if l == 0 {
@@ -121,7 +127,6 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 			}
 
 			currPtc := (l / float64(cap(srv.C))) * 100
-			//log.Printf("Desired: %d, Len: %g, Ptc: %v", srv.cliDesired, l, currPtc)
 			if currPtc > srv.cfg.ThresholdWarmUp*100 {
 				return true
 			}

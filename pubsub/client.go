@@ -3,6 +3,7 @@ package pubsubPool
 import (
 	"context"
 	"log"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,9 +14,9 @@ import (
 )
 
 const (
-	recordsTimeout  = 15 * time.Second
+	recordsTimeout  = 1 * time.Second
 	maxRecordSize   = 1000 * 1000
-	maxBatchRecords = 100
+	maxBatchRecords = 5000
 	maxBatchSize    = 3 << 20 // 4 MiB per call
 
 	partialFailureWait = 200 * time.Millisecond
@@ -34,7 +35,8 @@ var pool = &bytebufferpool.Pool{}
 // Client is the thread that connect to the remote redis server
 type Client struct {
 	sync.Mutex
-	srv         *Server
+	srv *Server
+
 	mode        int
 	buff        *bytebufferpool.ByteBuffer
 	count       int
@@ -46,6 +48,7 @@ type Client struct {
 	t           *time.Timer
 	lastFlushed time.Time
 	onFlyRetry  int64
+	topicCli    *pubsub.Topic
 }
 
 // NewClient creates a new client that connects to a Firehose
@@ -62,6 +65,13 @@ func NewClient(srv *Server) *Client {
 		buff:   pool.Get(),
 	}
 
+	clt.topicCli = clt.srv.pubsubCli.Topic(srv.cfg.Topic)
+	clt.topicCli.PublishSettings = pubsub.PublishSettings{
+		CountThreshold: srv.cfg.MaxRecords,
+		DelayThreshold: 1 * time.Second,
+		NumGoroutines:  runtime.NumCPU(),
+	}
+
 	go clt.listen()
 
 	return clt
@@ -70,7 +80,6 @@ func NewClient(srv *Server) *Client {
 func (clt *Client) listen() {
 	log.Printf("PubSub client %s [%d]: ready", clt.srv.cfg.Project, clt.ID)
 	for {
-
 		select {
 		case ri := <-clt.srv.C:
 			var r []byte
@@ -126,7 +135,6 @@ func (clt *Client) listen() {
 			if len(clt.batch)+1 >= maxBatchRecords {
 				clt.flush()
 			}
-
 		case <-clt.t.C:
 			clt.flush()
 			if clt.buff.Len() > 0 {
@@ -164,6 +172,7 @@ func (clt *Client) listen() {
 
 // flush build the last record if need and send the records slice to AWS Firehose
 func (clt *Client) flush() {
+	startTime := time.Now()
 
 	if !clt.t.Stop() {
 		select {
@@ -179,21 +188,20 @@ func (clt *Client) flush() {
 		return
 	}
 
+	defer func() {
+		log.Printf("Flush %d (%s)", size, time.Now().Sub(startTime))
+	}()
+
 	// Add context timeout to the request
 	ctx := context.Background()
 	for _, b := range clt.batch {
-		result := clt.srv.topicCli.Publish(ctx, &pubsub.Message{
+		clt.topicCli.Publish(ctx, &pubsub.Message{
 			Data: b.B,
 		})
-		// Block until the result is returned and a server-generated
-		// ID is returned for the published message.
-		_, err := result.Get(ctx)
-		if err != nil {
-			log.Printf("Error: %s", err)
-			return
-		}
-		//log.Printf("PubSub client %s [%d]: Published a message; msg ID: %v", clt.srv.cfg.Project, clt.ID, id)
 	}
+
+	// Flush
+	clt.topicCli.Flush()
 
 	// Put slice bytes in the pull after sent
 	for _, b := range clt.batch {
