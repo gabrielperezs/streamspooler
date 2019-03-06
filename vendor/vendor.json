@@ -1,0 +1,13 @@
+{
+	"comment": "",
+	"ignore": "test",
+	"package": [
+		{
+			"checksumSHA1": "u8EPtOH/FPpgYo5zvXOkxxX8VD8=",
+			"path": "cloud.google.com/go/pubsub",
+			"revision": "7e92b4d51047c91ec65bab1144f1c3183d7db9d6",
+			"revisionTime": "2019-02-27T23:17:42Z"
+		}
+	],
+	"rootPath": "github.com/gabrielperezs/streamspooler"
+}
