@@ -11,12 +11,13 @@ import (
 	"cloud.google.com/go/pubsub"
 	"github.com/gallir/bytebufferpool"
 	compress "github.com/gallir/smart-relayer/redis"
+	pb "google.golang.org/genproto/googleapis/pubsub/v1"
 )
 
 const (
 	recordsTimeout  = 1 * time.Second
 	maxRecordSize   = 1000 * 1000
-	maxBatchRecords = 5000
+	maxBatchRecords = 10000
 	maxBatchSize    = 3 << 20 // 4 MiB per call
 
 	partialFailureWait = 200 * time.Millisecond
@@ -172,7 +173,10 @@ func (clt *Client) listen() {
 
 // flush build the last record if need and send the records slice to AWS Firehose
 func (clt *Client) flush() {
-	startTime := time.Now()
+	//startTime := time.Now()
+	// defer func() {
+	// 	log.Printf("Flush %d (%s)", size, time.Now().Sub(startTime))
+	// }()
 
 	if !clt.t.Stop() {
 		select {
@@ -188,20 +192,44 @@ func (clt *Client) flush() {
 		return
 	}
 
-	defer func() {
-		log.Printf("Flush %d (%s)", size, time.Now().Sub(startTime))
-	}()
-
-	// Add context timeout to the request
-	ctx := context.Background()
-	for _, b := range clt.batch {
-		clt.topicCli.Publish(ctx, &pubsub.Message{
-			Data: b.B,
-		})
+	pbMsgs := make([]*pb.PubsubMessage, len(clt.batch))
+	for i, bm := range clt.batch {
+		pbMsgs[i] = &pb.PubsubMessage{
+			Data:       bm.B,
+			Attributes: nil,
+		}
 	}
 
+	_, err := clt.srv.pubsubCli.Pubc().Publish(context.Background(), &pb.PublishRequest{
+		Topic:    clt.srv.pubsubCli.Topic(clt.srv.cfg.Topic).String(),
+		Messages: pbMsgs,
+	})
+	if err != nil {
+		log.Panicf("E: %v", err)
+	}
+
+	// res, err := clt.srv.pubsubCli.pubc.Publish(ctx, &pb.PublishRequest{
+	// 	Topic:    t.name,
+	// 	Messages: pbMsgs,
+	// }, gax.WithGRPCOptions(grpc.MaxCallSendMsgSize(maxSendRecvBytes)))
+	// for i, bm := range bms {
+	// 	if err != nil {
+	// 		bm.res.set("", err)
+	// 	} else {
+	// 		bm.res.set(res.MessageIds[i], nil)
+	// 	}
+	// }
+
+	// // Add context timeout to the request
+	// ctx := context.Background()
+	// for _, b := range clt.batch {
+	// 	clt.topicCli.Publish(ctx, &pubsub.Message{
+	// 		Data: b.B,
+	// 	})
+	// }
+
 	// Flush
-	clt.topicCli.Flush()
+	//clt.topicCli.Flush()
 
 	// Put slice bytes in the pull after sent
 	for _, b := range clt.batch {

@@ -3,8 +3,26 @@
 	"ignore": "test",
 	"package": [
 		{
+			"checksumSHA1": "wQ4uGuRwMb24vG16pPQDOOCPkFo=",
+			"path": "cloud.google.com/go/internal/optional",
+			"revision": "7e92b4d51047c91ec65bab1144f1c3183d7db9d6",
+			"revisionTime": "2019-02-27T23:17:42Z"
+		},
+		{
+			"checksumSHA1": "FSifvUBJjm4OsSU5rp5s5+bqvN0=",
+			"path": "cloud.google.com/go/internal/version",
+			"revision": "7e92b4d51047c91ec65bab1144f1c3183d7db9d6",
+			"revisionTime": "2019-02-27T23:17:42Z"
+		},
+		{
 			"checksumSHA1": "u8EPtOH/FPpgYo5zvXOkxxX8VD8=",
 			"path": "cloud.google.com/go/pubsub",
+			"revision": "7e92b4d51047c91ec65bab1144f1c3183d7db9d6",
+			"revisionTime": "2019-02-27T23:17:42Z"
+		},
+		{
+			"checksumSHA1": "+NBwk2PHZuam3NYvDfp2xeSSLpg=",
+			"path": "cloud.google.com/go/pubsub/internal/distribution",
 			"revision": "7e92b4d51047c91ec65bab1144f1c3183d7db9d6",
 			"revisionTime": "2019-02-27T23:17:42Z"
 		}

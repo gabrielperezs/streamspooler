@@ -119,8 +119,6 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 				return true
 			}
 
-			//log.Printf("--------------- Desired: %d, Len: %d/%d", srv.cliDesired, len(srv.C), cap(srv.C))
-
 			l := float64(len(srv.C))
 			if l == 0 {
 				return false
@@ -146,8 +144,6 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	} else {
 		go srv.monad.Reload(monadCfg)
 	}
-
-	log.Printf("PubSub config: %#v", srv.cfg)
 
 	select {
 	case srv.chReload <- true:

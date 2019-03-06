@@ -92,6 +92,10 @@ func NewClient(ctx context.Context, projectID string, opts ...option.ClientOptio
 	}, nil
 }
 
+func (c *Client) Pubc() *vkit.PublisherClient {
+	return c.pubc
+}
+
 // Close releases any resources held by the client,
 // such as memory and goroutines.
 //
