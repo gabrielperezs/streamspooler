@@ -64,8 +64,8 @@ type Server struct {
 func New(cfg Config) *Server {
 
 	srv := &Server{
-		chDone:   make(chan bool),
-		chReload: make(chan bool),
+		chDone:   make(chan bool, 1),
+		chReload: make(chan bool, 1),
 		C:        make(chan interface{}, cfg.Buffer),
 	}
 
@@ -154,6 +154,10 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 func (srv *Server) Exit() {
 
 	srv.Lock()
+	if srv.exiting {
+		srv.Unlock()
+		return
+	}
 	srv.exiting = true
 	srv.Unlock()
 
