@@ -151,6 +151,27 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 }
 
 // Exit terminate all clients and close the channels
+func (srv *Server) Flush() (err error) {
+
+	srv.Lock()
+	if srv.exiting {
+		srv.Unlock()
+		return nil
+	}
+	cc := append(make([]*Client, 0), srv.clients...)
+	srv.Unlock()
+
+	for _, c := range cc {
+		e := c.Flush()
+		if e != nil {
+			err = e // Return the error if there is at least one
+		}
+	}
+
+	return
+}
+
+// Exit terminate all clients and close the channels
 func (srv *Server) Exit() {
 
 	srv.Lock()

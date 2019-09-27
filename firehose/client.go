@@ -10,7 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/firehose"
 	"github.com/gallir/bytebufferpool"
-	"github.com/gallir/smart-relayer/redis"
+	compress "github.com/gallir/smart-relayer/redis"
 )
 
 const (
@@ -113,7 +113,7 @@ func (clt *Client) listen() {
 				// log.Printf("flush: count %d/%d | batch %d/%d | size [%d] %d/%d",
 				// 	clt.count, clt.srv.cfg.MaxRecords, len(clt.batch), maxBatchRecords, recordSize, (clt.batchSize+recordSize+1)/1024, maxBatchSize/1024)
 				// Force flush
-				clt.flush()
+				clt.Flush()
 			}
 
 			// The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1000 KB.
@@ -132,16 +132,16 @@ func (clt *Client) listen() {
 			clt.batchSize += clt.buff.Len()
 
 			if len(clt.batch)+1 >= maxBatchRecords || clt.batchSize >= maxBatchSize {
-				clt.flush()
+				clt.Flush()
 			}
 
 		case <-clt.t.C:
-			clt.flush()
+			clt.Flush()
 			if clt.buff.Len() > 0 {
 				buff := clt.buff
 				clt.batch = append(clt.batch, buff)
 				clt.buff = pool.Get()
-				clt.flush()
+				clt.Flush()
 			}
 		case <-clt.finish:
 			//Stop and drain the timer channel
@@ -152,10 +152,10 @@ func (clt *Client) listen() {
 				}
 			}
 
-			clt.flush()
+			clt.Flush()
 			if clt.buff.Len() > 0 {
 				clt.batch = append(clt.batch, clt.buff)
-				clt.flush()
+				clt.Flush()
 			}
 
 			if l := len(clt.batch); l > 0 {
@@ -170,8 +170,8 @@ func (clt *Client) listen() {
 	}
 }
 
-// flush build the last record if need and send the records slice to AWS Firehose
-func (clt *Client) flush() {
+// Flush build the last record if need and send the records slice to AWS Firehose
+func (clt *Client) Flush() error {
 
 	if !clt.t.Stop() {
 		select {
@@ -184,7 +184,7 @@ func (clt *Client) flush() {
 	size := len(clt.batch)
 	// Don't send empty batch
 	if size == 0 {
-		return
+		return nil
 	}
 
 	// Create slice with the struct need by firehose
@@ -269,6 +269,8 @@ func (clt *Client) flush() {
 	clt.count = 0
 	clt.batch = nil
 	clt.records = nil
+
+	return err
 }
 
 // Exit finish the go routine of the client
