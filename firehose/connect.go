@@ -18,7 +18,7 @@ const (
 )
 
 func (srv *Server) _reload() {
-	for _ = range srv.chReload {
+	for range srv.chReload {
 		if srv.isExiting() {
 			continue
 		}

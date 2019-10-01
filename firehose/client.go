@@ -43,6 +43,7 @@ type Client struct {
 	batchSize   int
 	records     []*firehose.Record
 	done        chan bool
+	flushed     chan bool
 	finish      chan bool
 	ID          int64
 	t           *time.Timer
@@ -57,6 +58,7 @@ func NewClient(srv *Server) *Client {
 	clt := &Client{
 		done:    make(chan bool),
 		finish:  make(chan bool),
+		flushed: make(chan bool),
 		srv:     srv,
 		ID:      n,
 		t:       time.NewTimer(recordsTimeout),
@@ -113,7 +115,7 @@ func (clt *Client) listen() {
 				// log.Printf("flush: count %d/%d | batch %d/%d | size [%d] %d/%d",
 				// 	clt.count, clt.srv.cfg.MaxRecords, len(clt.batch), maxBatchRecords, recordSize, (clt.batchSize+recordSize+1)/1024, maxBatchSize/1024)
 				// Force flush
-				clt.Flush()
+				clt.flush()
 			}
 
 			// The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1000 KB.
@@ -132,18 +134,18 @@ func (clt *Client) listen() {
 			clt.batchSize += clt.buff.Len()
 
 			if len(clt.batch)+1 >= maxBatchRecords || clt.batchSize >= maxBatchSize {
-				clt.Flush()
+				clt.flush()
 			}
 
 		case <-clt.t.C:
-			clt.Flush()
+			clt.flush()
 			if clt.buff.Len() > 0 {
 				buff := clt.buff
 				clt.batch = append(clt.batch, buff)
 				clt.buff = pool.Get()
-				clt.Flush()
+				clt.flush()
 			}
-		case <-clt.finish:
+		case f := <-clt.finish:
 			//Stop and drain the timer channel
 			if !clt.t.Stop() {
 				select {
@@ -152,26 +154,38 @@ func (clt *Client) listen() {
 				}
 			}
 
-			clt.Flush()
+			clt.flush()
 			if clt.buff.Len() > 0 {
 				clt.batch = append(clt.batch, clt.buff)
-				clt.Flush()
+				clt.flush()
 			}
 
-			if l := len(clt.batch); l > 0 {
-				log.Printf("Firehose client %s [%d]: Exit, %d records lost", clt.srv.cfg.StreamName, clt.ID, l)
+			if f {
+				// Have to finish
+				if l := len(clt.batch); l > 0 {
+					log.Printf("Firehose client %s [%d]: Exit, %d records lost", clt.srv.cfg.StreamName, clt.ID, l)
+					clt.done <- false // WARN: To avoid blocking the processs
+					return
+				}
+
+				log.Printf("Firehose client %s [%d]: Exit", clt.srv.cfg.StreamName, clt.ID)
+				clt.done <- true
 				return
 			}
 
-			log.Printf("Firehose client %s [%d]: Exit", clt.srv.cfg.StreamName, clt.ID)
-			clt.done <- true
-			return
+			// Only a flush
+			if l := len(clt.batch); l > 0 {
+				log.Printf("Firehose client %s [%d]: Flush, %d records pending", clt.srv.cfg.StreamName, clt.ID, l)
+				clt.flushed <- false // WARN: To avoid blocking the processs
+				return
+			}
+			clt.flushed <- true
 		}
 	}
 }
 
-// Flush build the last record if need and send the records slice to AWS Firehose
-func (clt *Client) Flush() error {
+// flush build the last record if need and send the records slice to AWS Firehose
+func (clt *Client) flush() error {
 
 	if !clt.t.Stop() {
 		select {

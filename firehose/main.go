@@ -1,6 +1,7 @@
 package firehosePool
 
 import (
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -150,21 +151,23 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	return nil
 }
 
-// Exit terminate all clients and close the channels
+// Flush terminate all clients and close the channels
 func (srv *Server) Flush() (err error) {
-
 	srv.Lock()
+	defer srv.Unlock()
+
 	if srv.exiting {
-		srv.Unlock()
 		return nil
 	}
-	cc := append(make([]*Client, 0), srv.clients...)
-	srv.Unlock()
 
-	for _, c := range cc {
-		e := c.Flush()
-		if e != nil {
-			err = e // Return the error if there is at least one
+	for _, c := range srv.clients {
+		c.finish <- false // It will flush
+	}
+
+	for _, c := range srv.clients {
+		f := <-c.flushed
+		if !f {
+			return errors.New("Flushed failed")
 		}
 	}
 
@@ -173,7 +176,6 @@ func (srv *Server) Flush() (err error) {
 
 // Exit terminate all clients and close the channels
 func (srv *Server) Exit() {
-
 	srv.Lock()
 	if srv.exiting {
 		srv.Unlock()
