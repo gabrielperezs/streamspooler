@@ -147,18 +147,22 @@ func (clt *Client) listen() {
 			}
 		case f := <-clt.finish:
 			//Stop and drain the timer channel
-			if !clt.t.Stop() {
+			if f && !clt.t.Stop() {
 				select {
 				case <-clt.t.C:
 				default:
 				}
 			}
 
-			clt.flush()
+			var err error
 			if clt.buff.Len() > 0 {
+				if len(clt.batch) >= maxBatchRecords {
+					err = clt.flush()
+				}
 				clt.batch = append(clt.batch, clt.buff)
-				clt.flush()
+				clt.buff = pool.Get() // Get a new pool in case is only a flush
 			}
+			err = clt.flush()
 
 			if f {
 				// Have to finish
@@ -174,7 +178,7 @@ func (clt *Client) listen() {
 			}
 
 			// Only a flush
-			if l := len(clt.batch); l > 0 {
+			if l := len(clt.batch); l > 0 || err != nil {
 				log.Printf("Firehose client %s [%d]: Flush, %d records pending", clt.srv.cfg.StreamName, clt.ID, l)
 				clt.flushed <- false // WARN: To avoid blocking the processs
 				return
