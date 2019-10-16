@@ -221,6 +221,9 @@ func (clt *Client) flush() error {
 	// Send the request
 	err := req.Send()
 	if err != nil {
+		if clt.srv.cfg.OnFHError != nil {
+			clt.srv.cfg.OnFHError(err)
+		}
 		if req.IsErrorThrottle() {
 			log.Printf("Firehose client %s [%d]: ERROR IsErrorThrottle: %s", clt.srv.cfg.StreamName, clt.ID, err)
 		} else {
@@ -256,6 +259,10 @@ func (clt *Client) flush() error {
 		for i, r := range output.RequestResponses {
 			if r == nil || r.ErrorCode == nil {
 				continue
+			}
+
+			if clt.srv.cfg.OnFHError != nil {
+				clt.srv.cfg.OnFHError(err)
 			}
 
 			// The limit of retry elements will be applied just to non-critical messages
