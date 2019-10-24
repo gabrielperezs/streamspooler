@@ -2,6 +2,7 @@ package firehosePool
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -266,7 +267,7 @@ func (clt *Client) flush() error {
 			}
 
 			if clt.srv.cfg.OnFHError != nil {
-				clt.srv.cfg.OnFHError(err)
+				clt.srv.cfg.OnFHError(errors.New(*r.ErrorMessage))
 			}
 
 			// The limit of retry elements will be applied just to non-critical messages
