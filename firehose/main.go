@@ -22,6 +22,7 @@ const (
 // Config is the general configuration for the server
 type Config struct {
 	// Internal clients details
+	MinWorkers      int
 	MaxWorkers      int
 	ThresholdWarmUp float64
 	Interval        time.Duration
@@ -106,41 +107,48 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		srv.cfg.MaxRecords = defaultMaxRecords
 	}
 
-	monadCfg := &monad.Config{
-		Min:            uint64(1),
-		Max:            uint64(srv.cfg.MaxWorkers),
-		Interval:       srv.cfg.Interval,
-		CoolDownPeriod: srv.cfg.CoolDownPeriod,
-		WarmFn: func() bool {
-			if srv.cliDesired == 0 {
-				return true
-			}
+	if srv.cfg.MaxWorkers > srv.cfg.MinWorkers {
+		monadCfg := &monad.Config{
+			Min:            uint64(1),
+			Max:            uint64(srv.cfg.MaxWorkers),
+			Interval:       srv.cfg.Interval,
+			CoolDownPeriod: srv.cfg.CoolDownPeriod,
+			WarmFn: func() bool {
+				if srv.cliDesired == 0 {
+					return true
+				}
 
-			l := float64(len(srv.C))
-			if l == 0 {
+				l := float64(len(srv.C))
+				if l == 0 {
+					return false
+				}
+
+				currPtc := (l / float64(cap(srv.C))) * 100
+
+				if currPtc > srv.cfg.ThresholdWarmUp*100 {
+					return true
+				}
 				return false
-			}
+			},
+			DesireFn: func(n uint64) {
+				srv.cliDesired = int(n)
+				select {
+				case srv.chReload <- true:
+				default:
+				}
+			},
+		}
 
-			currPtc := (l / float64(cap(srv.C))) * 100
-
-			if currPtc > srv.cfg.ThresholdWarmUp*100 {
-				return true
-			}
-			return false
-		},
-		DesireFn: func(n uint64) {
-			srv.cliDesired = int(n)
-			select {
-			case srv.chReload <- true:
-			default:
-			}
-		},
-	}
-
-	if srv.monad == nil {
-		srv.monad = monad.New(monadCfg)
+		if srv.monad == nil {
+			srv.monad = monad.New(monadCfg)
+		} else {
+			go srv.monad.Reload(monadCfg)
+		}
 	} else {
-		go srv.monad.Reload(monadCfg)
+		srv.cliDesired = srv.cfg.MaxWorkers
+		for len(srv.clients) < srv.cliDesired {
+			srv.clients = append(srv.clients, NewClient(srv))
+		}
 	}
 
 	log.Printf("Firehose config: %#v", srv.cfg)
