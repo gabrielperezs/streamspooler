@@ -40,6 +40,7 @@ type Config struct {
 	StreamName string // Kinesis/Firehose stream name
 	Region     string // AWS region
 	Profile    string // AWS Profile name
+	Endpoint   string // AWS endpoint
 
 	OnFHError func(e error)
 }
