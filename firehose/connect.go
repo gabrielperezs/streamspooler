@@ -82,7 +82,7 @@ func (srv *Server) clientsReset() (err error) {
 
 		config := &aws.Config{Region: aws.String(srv.cfg.Region)}
 		if srv.cfg.Endpoint != "" {
-			config.Endpoint = &srv.cfg.Endpoint
+			config.Endpoint = aws.String(srv.cfg.Endpoint)
 		}
 
 		srv.awsSvc = firehose.New(sess, config)
