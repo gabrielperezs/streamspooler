@@ -80,7 +80,12 @@ func (srv *Server) clientsReset() (err error) {
 			return err
 		}
 
-		srv.awsSvc = firehose.New(sess, &aws.Config{Region: aws.String(srv.cfg.Region)})
+		config := &aws.Config{Region: aws.String(srv.cfg.Region)}
+		if srv.cfg.Endpoint != "" {
+			config.Endpoint = aws.String(srv.cfg.Endpoint)
+		}
+
+		srv.awsSvc = firehose.New(sess, config)
 		stream := &firehose.DescribeDeliveryStreamInput{
 			DeliveryStreamName: &srv.cfg.StreamName,
 		}
