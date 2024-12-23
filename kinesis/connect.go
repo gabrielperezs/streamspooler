@@ -1,12 +1,12 @@
 package kinesisPool
 
 import (
+	"context"
 	"log"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/kinesis"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/kinesis"
 )
 
 const (
@@ -60,18 +60,15 @@ func (srv *Server) clientsReset() (err error) {
 
 	if srv.errors == 0 && srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
 		log.Printf("Kinesis Reload config to the stream %s", srv.cfg.StreamName)
-
-		var sess *session.Session
-
-		if srv.cfg.Profile != "" {
-			sess, err = session.NewSessionWithOptions(session.Options{
-				Profile:           srv.cfg.Profile,
-				SharedConfigState: session.SharedConfigEnable,
-			})
-		} else {
-			sess, err = session.NewSession()
+		optFns := []func(*config.LoadOptions) error{
+			config.WithRegion(srv.cfg.Region),
 		}
 
+		if srv.cfg.Profile != "" {
+			optFns = append(optFns, config.WithSharedConfigProfile(srv.cfg.Profile))
+		}
+
+		cfg, err := config.LoadDefaultConfig(context.TODO(), optFns...)
 		if err != nil {
 			log.Printf("Kinesis ERROR: session: %s", err)
 
@@ -80,13 +77,13 @@ func (srv *Server) clientsReset() (err error) {
 			return err
 		}
 
-		srv.awsSvc = kinesis.New(sess, &aws.Config{Region: aws.String(srv.cfg.Region)})
+		srv.awsSvc = kinesis.NewFromConfig(cfg)
 		stream := &kinesis.DescribeStreamInput{
 			StreamName: &srv.cfg.StreamName,
 		}
 
 		var l *kinesis.DescribeStreamOutput
-		l, err = srv.awsSvc.DescribeStream(stream)
+		l, err = srv.awsSvc.DescribeStream(context.TODO(), stream)
 		if err != nil {
 			log.Printf("Kinesis ERROR: describe stream: %s", err)
 
@@ -98,7 +95,7 @@ func (srv *Server) clientsReset() (err error) {
 		log.Printf("Kinesis Connected to %s (%s) status %s",
 			*l.StreamDescription.StreamName,
 			*l.StreamDescription.StreamARN,
-			*l.StreamDescription.StreamStatus)
+			l.StreamDescription.StreamStatus)
 
 		srv.lastConnection = time.Now()
 		srv.errors = 0

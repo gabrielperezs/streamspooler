@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/service/firehose"
+	"github.com/aws/aws-sdk-go-v2/service/firehose"
 	"github.com/gabrielperezs/monad"
 )
 
@@ -59,7 +59,7 @@ type Server struct {
 	chDone   chan bool
 	exiting  bool
 
-	awsSvc         *firehose.Firehose
+	awsSvc         *firehose.Client
 	lastConnection time.Time
 	lastError      time.Time
 	errors         int64
@@ -126,10 +126,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 
 				currPtc := (l / float64(cap(srv.C))) * 100
 
-				if currPtc > srv.cfg.ThresholdWarmUp*100 {
-					return true
-				}
-				return false
+				return currPtc > srv.cfg.ThresholdWarmUp*100
 			},
 			DesireFn: func(n uint64) {
 				srv.cliDesired = int(n)
@@ -178,7 +175,7 @@ func (srv *Server) Flush() (err error) {
 	for _, c := range srv.clients {
 		f := <-c.flushed
 		if !f {
-			return errors.New("Flushed failed")
+			return errors.New("flushed failed")
 		}
 	}
 
@@ -219,11 +216,7 @@ func (srv *Server) isExiting() bool {
 	srv.Lock()
 	defer srv.Unlock()
 
-	if srv.exiting {
-		return true
-	}
-
-	return false
+	return srv.exiting
 }
 
 // Waiting to the server if is running

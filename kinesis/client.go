@@ -10,10 +10,11 @@ import (
 
 	"github.com/spaolacci/murmur3"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/kinesis"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/kinesis"
+	"github.com/aws/aws-sdk-go-v2/service/kinesis/types"
 	"github.com/gallir/bytebufferpool"
-	"github.com/gallir/smart-relayer/redis"
+	compress "github.com/gallir/smart-relayer/redis"
 )
 
 const (
@@ -44,7 +45,7 @@ type Client struct {
 	count       int
 	batch       []*bytebufferpool.ByteBuffer
 	batchSize   int
-	records     []*kinesis.PutRecordsRequestEntry
+	records     []types.PutRecordsRequestEntry
 	done        chan bool
 	finish      chan bool
 	ID          int64
@@ -64,7 +65,7 @@ func NewClient(srv *Server) *Client {
 		ID:      n,
 		t:       time.NewTimer(recordsTimeout),
 		batch:   make([]*bytebufferpool.ByteBuffer, 0, maxBatchRecords),
-		records: make([]*kinesis.PutRecordsRequestEntry, 0, maxBatchRecords),
+		records: make([]types.PutRecordsRequestEntry, 0, maxBatchRecords),
 		buff:    pool.Get(),
 	}
 
@@ -193,7 +194,7 @@ func (clt *Client) flush() {
 	// Create slice with the struct need by Kinesis
 	for _, b := range clt.batch {
 		m1 := murmur3.Sum64(b.B)
-		clt.records = append(clt.records, &kinesis.PutRecordsRequestEntry{
+		clt.records = append(clt.records, types.PutRecordsRequestEntry{
 			Data:         b.B,
 			PartitionKey: aws.String(fmt.Sprintf("%02x", m1)),
 		})
@@ -204,7 +205,7 @@ func (clt *Client) flush() {
 	defer cancel()
 
 	// Create the request
-	output, err := clt.srv.awsSvc.PutRecordsWithContext(ctx, &kinesis.PutRecordsInput{
+	output, err := clt.srv.awsSvc.PutRecords(ctx, &kinesis.PutRecordsInput{
 		StreamName: aws.String(clt.srv.cfg.StreamName),
 		Records:    clt.records,
 	})
@@ -237,7 +238,7 @@ func (clt *Client) flush() {
 		// fails to be added to a stream includes ErrorCode and ErrorMessage in the
 		// result.
 		for i, r := range output.Records {
-			if r == nil || r.ErrorCode != nil {
+			if r.ErrorCode != nil {
 				continue
 			}
 

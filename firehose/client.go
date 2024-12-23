@@ -8,8 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/firehose"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/firehose"
+	"github.com/aws/aws-sdk-go-v2/service/firehose/types"
+	"github.com/aws/smithy-go"
 	"github.com/gallir/bytebufferpool"
 	compress "github.com/gallir/smart-relayer/redis"
 )
@@ -42,7 +44,7 @@ type Client struct {
 	count       int
 	batch       []*bytebufferpool.ByteBuffer
 	batchSize   int
-	records     []*firehose.Record
+	records     []types.Record
 	done        chan bool
 	flushed     chan bool
 	finish      chan bool
@@ -64,7 +66,7 @@ func NewClient(srv *Server) *Client {
 		ID:      n,
 		t:       time.NewTimer(recordsTimeout),
 		batch:   make([]*bytebufferpool.ByteBuffer, 0, maxBatchRecords),
-		records: make([]*firehose.Record, 0, maxBatchRecords),
+		records: make([]types.Record, 0, maxBatchRecords),
 		buff:    pool.Get(),
 	}
 
@@ -208,31 +210,30 @@ func (clt *Client) flush() error {
 
 	// Create slice with the struct need by firehose
 	for _, b := range clt.batch {
-		clt.records = append(clt.records, &firehose.Record{Data: b.B})
+		clt.records = append(clt.records, types.Record{
+			Data: b.B,
+		})
 	}
 
-	// Create the request
-	req, output := clt.srv.awsSvc.PutRecordBatchRequest(&firehose.PutRecordBatchInput{
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+
+	// Send the batch
+	output, err := clt.srv.awsSvc.PutRecordBatch(ctx, &firehose.PutRecordBatchInput{
 		DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
 		Records:            clt.records,
 	})
 
-	// Add context timeout to the request
-	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
-	defer cancel()
-
-	req.SetContext(ctx)
-
-	// Send the request
-	err := req.Send()
 	if err != nil {
 		if clt.srv.cfg.OnFHError != nil {
 			clt.srv.cfg.OnFHError(err)
 		}
-		if req.IsErrorThrottle() {
-			log.Printf("Firehose client %s [%d]: ERROR IsErrorThrottle: %s", clt.srv.cfg.StreamName, clt.ID, err)
+		var ae smithy.APIError
+		if errors.As(err, &ae) && ae.ErrorCode() == "ThrottlingException" {
+			log.Printf("Firehose client %s [%d]: ERROR ThrottlingException: %s", clt.srv.cfg.StreamName, clt.ID, err)
 		} else {
-			log.Printf("Firehose client %s [%d]: ERROR PutRecordBatch->Send: %s", clt.srv.cfg.StreamName, clt.ID, err)
+			log.Printf("Firehose client %s [%d]: ERROR PutRecordBatch: %s", clt.srv.cfg.StreamName, clt.ID, err)
 			var totalSize int
 			for _, b := range clt.batch {
 				totalSize += b.Len()
@@ -262,7 +263,7 @@ func (clt *Client) flush() error {
 		time.Sleep(partialFailureWait)
 
 		for i, r := range output.RequestResponses {
-			if r == nil || r.ErrorCode == nil {
+			if r.ErrorCode == nil {
 				continue
 			}
 

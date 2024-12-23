@@ -1,12 +1,12 @@
 package firehosePool
 
 import (
+	"context"
 	"log"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/firehose"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/firehose"
 )
 
 const (
@@ -38,7 +38,7 @@ func (srv *Server) failure() {
 	srv.Lock()
 	defer srv.Unlock()
 
-	if time.Now().Sub(srv.lastError) > errorsFrame {
+	if time.Since(srv.lastError) > errorsFrame {
 		srv.errors = 0
 	}
 
@@ -61,37 +61,32 @@ func (srv *Server) clientsReset() (err error) {
 	if srv.errors == 0 && srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
 		log.Printf("Firehose Reload config to the stream %s", srv.cfg.StreamName)
 
-		var sess *session.Session
-
-		if srv.cfg.Profile != "" {
-			sess, err = session.NewSessionWithOptions(session.Options{
-				Profile:           srv.cfg.Profile,
-				SharedConfigState: session.SharedConfigEnable,
-			})
-		} else {
-			sess, err = session.NewSession()
+		optFns := []func(*config.LoadOptions) error{
+			config.WithRegion(srv.cfg.Region),
+		}
+		if srv.cfg.Endpoint != "" {
+			optFns = append(optFns, config.WithBaseEndpoint(srv.cfg.Endpoint))
 		}
 
-		if err != nil {
-			log.Printf("Firehose ERROR: session: %s", err)
+		if srv.cfg.Profile != "" {
+			optFns = append(optFns, config.WithSharedConfigProfile(srv.cfg.Profile))
+		}
 
+		cfg, err := config.LoadDefaultConfig(context.TODO(), optFns...)
+		if err != nil {
+			log.Printf("Firehose Config error %s", err)
 			srv.errors++
 			srv.lastError = time.Now()
 			return err
 		}
 
-		config := &aws.Config{Region: aws.String(srv.cfg.Region)}
-		if srv.cfg.Endpoint != "" {
-			config.Endpoint = aws.String(srv.cfg.Endpoint)
-		}
-
-		srv.awsSvc = firehose.New(sess, config)
+		srv.awsSvc = firehose.NewFromConfig(cfg)
 		stream := &firehose.DescribeDeliveryStreamInput{
 			DeliveryStreamName: &srv.cfg.StreamName,
 		}
 
 		var l *firehose.DescribeDeliveryStreamOutput
-		l, err = srv.awsSvc.DescribeDeliveryStream(stream)
+		l, err = srv.awsSvc.DescribeDeliveryStream(context.TODO(), stream)
 		if err != nil {
 			log.Printf("Firehose ERROR: describe stream: %s", err)
 
@@ -103,7 +98,7 @@ func (srv *Server) clientsReset() (err error) {
 		log.Printf("Firehose Connected to %s (%s) status %s",
 			*l.DeliveryStreamDescription.DeliveryStreamName,
 			*l.DeliveryStreamDescription.DeliveryStreamARN,
-			*l.DeliveryStreamDescription.DeliveryStreamStatus)
+			l.DeliveryStreamDescription.DeliveryStreamStatus)
 
 		srv.lastConnection = time.Now()
 		srv.errors = 0

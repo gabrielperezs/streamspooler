@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/service/kinesis"
+	"github.com/aws/aws-sdk-go-v2/service/kinesis"
 	"github.com/gabrielperezs/monad"
 )
 
@@ -54,7 +54,7 @@ type Server struct {
 	chDone   chan bool
 	exiting  bool
 
-	awsSvc         *kinesis.Kinesis
+	awsSvc         *kinesis.Client
 	lastConnection time.Time
 	lastError      time.Time
 	errors         int64
