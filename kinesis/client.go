@@ -8,13 +8,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gabrielperezs/streamspooler/internal/compress"
 	"github.com/spaolacci/murmur3"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/kinesis"
 	"github.com/aws/aws-sdk-go-v2/service/kinesis/types"
 	"github.com/gallir/bytebufferpool"
-	compress "github.com/gallir/smart-relayer/redis"
 )
 
 const (

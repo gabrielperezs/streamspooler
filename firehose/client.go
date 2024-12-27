@@ -12,8 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/firehose"
 	"github.com/aws/aws-sdk-go-v2/service/firehose/types"
 	"github.com/aws/smithy-go"
+	"github.com/gabrielperezs/streamspooler/internal/compress"
 	"github.com/gallir/bytebufferpool"
-	compress "github.com/gallir/smart-relayer/redis"
 )
 
 const (

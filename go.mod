@@ -12,7 +12,7 @@ require (
 	github.com/aws/smithy-go v1.22.1
 	github.com/gabrielperezs/monad v0.0.0-20190930103133-261d32f2d7b2
 	github.com/gallir/bytebufferpool v1.0.0
-	github.com/gallir/smart-relayer v8.8.6+incompatible
+	github.com/golang/snappy v0.0.2
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/spaolacci/murmur3 v1.1.0
 )
@@ -29,7 +29,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.24.8 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.28.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.33.3 // indirect
-	github.com/golang/snappy v0.0.2 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 )
