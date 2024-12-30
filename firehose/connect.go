@@ -57,7 +57,7 @@ func (srv *Server) clientsReset() (err error) {
 	defer srv.Unlock()
 	log.Println("Firehose: RELOADING clients unlocked")
 
-	if srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
+	if srv.errors == 0 && srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
 		log.Printf("Firehose Reload config to the stream %s", srv.cfg.StreamName)
 
 		srv.awsSvc, err = srv.Fhcg.GetClient(&srv.cfg)
