@@ -6,17 +6,13 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/gabrielperezs/streamspooler/firehose"
+	firehosePool "github.com/gabrielperezs/streamspooler/firehose"
 	"github.com/pquerna/ffjson/ffjson"
 )
 
 type record struct {
 	TS int64  `json:"ts,omitempty"`
 	S  string `json:"s,omitempty"`
-}
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
 }
 
 var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -34,6 +30,7 @@ func main() {
 		StreamName: "firehoseStreamName",
 		Profile:    "yourprofile",
 		Region:     "eu-west-1",
+		MaxRecords: 1,
 	}
 	p := firehosePool.New(c)
 
@@ -51,6 +48,7 @@ func main() {
 
 			select {
 			case p.C <- r:
+				fmt.Printf("Record sent\n")
 			default:
 				log.Printf("Channel closed or full")
 				return
@@ -61,7 +59,7 @@ func main() {
 	}()
 
 	go func() {
-		<-time.After(60 * time.Second)
+		<-time.After(160 * time.Second)
 		p.Exit()
 	}()
 

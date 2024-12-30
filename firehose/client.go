@@ -38,25 +38,24 @@ var pool = &bytebufferpool.Pool{}
 // Client is the thread that connect to the remote redis server
 type Client struct {
 	sync.Mutex
-	srv         *Server
-	mode        int
-	buff        *bytebufferpool.ByteBuffer
-	count       int
-	batch       []*bytebufferpool.ByteBuffer
-	batchSize   int
-	records     []types.Record
-	done        chan bool
-	flushed     chan bool
-	finish      chan bool
-	ID          int64
-	t           *time.Timer
-	lastFlushed time.Time
-	onFlyRetry  int64
+	srv        *Server
+	buff       *bytebufferpool.ByteBuffer
+	count      int
+	batch      []*bytebufferpool.ByteBuffer
+	batchSize  int
+	records    []types.Record
+	done       chan bool
+	flushed    chan bool
+	finish     chan bool
+	ID         int64
+	t          *time.Timer
+	onFlyRetry int64
 }
 
 // NewClient creates a new client that connects to a Firehose
 func NewClient(srv *Server) *Client {
 	n := atomic.AddInt64(&clientCount, 1)
+	log.Printf("Firehose client %s [%d]: starting", srv.cfg.StreamName, n)
 
 	clt := &Client{
 		done:    make(chan bool),
@@ -115,8 +114,8 @@ func (clt *Client) listen() {
 
 			// The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
 			if clt.count >= clt.srv.cfg.MaxRecords || len(clt.batch) >= maxBatchRecords || clt.batchSize+recordSize+1 >= maxBatchSize {
-				// log.Printf("flush: count %d/%d | batch %d/%d | size [%d] %d/%d",
-				// 	clt.count, clt.srv.cfg.MaxRecords, len(clt.batch), maxBatchRecords, recordSize, (clt.batchSize+recordSize+1)/1024, maxBatchSize/1024)
+				log.Printf("flush: count %d/%d | batch %d/%d | size [%d] %d/%d",
+					clt.count, clt.srv.cfg.MaxRecords, len(clt.batch), maxBatchRecords, recordSize, (clt.batchSize+recordSize+1)/1024, maxBatchSize/1024)
 				// Force flush
 				clt.flush()
 			}
@@ -159,9 +158,9 @@ func (clt *Client) listen() {
 
 			var err error
 			if clt.buff.Len() > 0 {
-				if len(clt.batch) >= maxBatchRecords {
-					err = clt.flush()
-				}
+				// if len(clt.batch) >= maxBatchRecords {
+				// 	err = clt.flush()
+				// }
 				clt.batch = append(clt.batch, clt.buff)
 				clt.buff = pool.Get() // Get a new pool in case is only a flush
 			}
@@ -206,6 +205,12 @@ func (clt *Client) flush() error {
 	// Don't send empty batch
 	if size == 0 {
 		return nil
+	}
+
+	if clt.srv.awsSvc == nil {
+		log.Println("flush error: firehose client not ready")
+		clt.srv.failure()
+		return errors.New("flush error: firehose client not ready")
 	}
 
 	// Create slice with the struct need by firehose
@@ -312,6 +317,10 @@ func (clt *Client) retry(orig []byte) {
 	copy(b, orig[:len(orig)-len(newLine)])
 
 	go func(b []byte) {
+		if clt.srv.isExiting() {
+			log.Printf("client retry: skip, server is exiting")
+			return
+		}
 		atomic.AddInt64(&clt.onFlyRetry, 1)
 		defer atomic.AddInt64(&clt.onFlyRetry, -1)
 		clt.srv.C <- b

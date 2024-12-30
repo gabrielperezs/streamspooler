@@ -15,6 +15,7 @@ require (
 	github.com/golang/snappy v0.0.4
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/spaolacci/murmur3 v1.1.0
+	golang.org/x/exp v0.0.0-20241217172543-b2144cdd0a67
 )
 
 require (

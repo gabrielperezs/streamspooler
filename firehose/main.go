@@ -63,6 +63,7 @@ type Server struct {
 	lastConnection time.Time
 	lastError      time.Time
 	errors         int64
+	Fhcg           ClientGetter
 }
 
 // New create a pool of workers
@@ -76,6 +77,7 @@ func New(cfg Config) *Server {
 		chDone:   make(chan bool, 1),
 		chReload: make(chan bool, 1),
 		C:        make(chan interface{}, cfg.Buffer),
+		Fhcg:     &FHClientGetter{},
 	}
 
 	go srv._reload()
