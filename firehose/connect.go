@@ -9,8 +9,8 @@ const (
 	connectionRetry         = 2 * time.Second
 	connectTimeout          = 15 * time.Second
 	errorsFrame             = 10 * time.Second
-	maxErrors               = 5 // Limit of errors to restart the connection
-	limitIntervalConnection = 3 * time.Second
+	maxErrors               = 10 // Limit of errors to restart the connection
+	limitIntervalConnection = 30 * time.Second
 )
 
 func (srv *Server) _reload() {
