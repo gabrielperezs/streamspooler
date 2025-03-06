@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	recordsTimeout  = 15 * time.Second
-	maxRecordSize   = 1000 * 1000 // The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1000 KB
+	recordsTimeout = 15 * time.Second
+	// TODO CHECK
+	maxRecordSize   = 1000 * 1024 // The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1024 KB
 	maxBatchRecords = 500         // The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
-	maxBatchSize    = 3 << 20     // 4 MiB per call
+	maxBatchSize    = 4 << 20     // 4 MiB per call
 
 	partialFailureWait = 200 * time.Millisecond
 	globalFailureWait  = 500 * time.Millisecond
@@ -124,9 +125,11 @@ func (clt *Client) listen() {
 			if !clt.srv.cfg.ConcatRecords || clt.buff.Len()+recordSize+1 >= maxRecordSize || clt.count >= clt.srv.cfg.MaxRecords {
 				if clt.buff.Len() > 0 {
 					// Save in new record
+					log.Printf("Appending new record size %d/%d, count %d/%d", clt.buff.Len(), maxRecordSize, clt.count, clt.srv.cfg.MaxRecords)
 					buff := clt.buff
 					clt.batch = append(clt.batch, buff)
 					clt.buff = pool.Get()
+					// clt.count = 0 // TODO CHECK
 				}
 			}
 
@@ -134,6 +137,10 @@ func (clt *Client) listen() {
 			clt.buff.Write(newLine)
 
 			clt.batchSize += clt.buff.Len()
+			log.Printf("Wrote record to buff - batch num #%d/%d, record count %d/%d recordsize %d/%d batchsize %d/%d err %d\n",
+				len(clt.batch), maxBatchRecords,
+				clt.count, clt.srv.cfg.MaxRecords, clt.buff.Len(), maxRecordSize, clt.batchSize, maxBatchSize,
+				clt.srv.errors)
 
 			if len(clt.batch)+1 >= maxBatchRecords || clt.batchSize >= maxBatchSize {
 				clt.flush()
@@ -220,7 +227,6 @@ func (clt *Client) flush() error {
 		})
 	}
 
-	// Create context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer cancel()
 
@@ -299,8 +305,9 @@ func (clt *Client) flush() error {
 
 	clt.batchSize = 0
 	clt.count = 0
-	clt.batch = nil
-	clt.records = nil
+	// TODO CHECK
+	clt.batch = clt.batch[:0]
+	clt.records = clt.records[:0]
 
 	return err
 }

@@ -10,7 +10,7 @@ const (
 	connectTimeout          = 15 * time.Second
 	errorsFrame             = 10 * time.Second
 	maxErrors               = 10 // Limit of errors to restart the connection
-	limitIntervalConnection = 30 * time.Second
+	limitIntervalConnection = 5 * time.Second
 )
 
 func (srv *Server) _reload() {
@@ -52,17 +52,20 @@ func (srv *Server) failure() {
 }
 
 func (srv *Server) clientsReset() (err error) {
-	log.Println("Firehose: RELOADING clients")
 	srv.Lock()
 	defer srv.Unlock()
 	log.Println("Firehose: RELOADING clients unlocked")
+
+	defer func() {
+		log.Printf("Firehose %s clients %d, in the queue %d/%d", srv.cfg.StreamName, len(srv.clients), len(srv.C), cap(srv.C))
+	}()
 
 	if srv.errors == 0 && srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
 		log.Printf("Firehose Reload config to the stream %s", srv.cfg.StreamName)
 
 		srv.awsSvc, err = srv.Fhcg.GetClient(&srv.cfg)
 		if err != nil {
-			log.Printf("firehose init error %s", err)
+			log.Printf("firehose init error: %s", err)
 			srv.errors++
 			srv.lastError = time.Now()
 			return err
@@ -71,10 +74,6 @@ func (srv *Server) clientsReset() (err error) {
 		srv.lastConnection = time.Now()
 		srv.errors = 0
 	}
-
-	defer func() {
-		log.Printf("Firehose %s clients %d, in the queue %d/%d", srv.cfg.StreamName, len(srv.clients), len(srv.C), cap(srv.C))
-	}()
 
 	currClients := len(srv.clients)
 

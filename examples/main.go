@@ -27,10 +27,12 @@ func RandStringRunes(n int) string {
 
 func main() {
 	c := firehosePool.Config{
-		StreamName: "firehoseStreamName",
-		Profile:    "yourprofile",
-		Region:     "eu-west-1",
-		MaxRecords: 1,
+		StreamName:    "webbeds-testing-stream",
+		Profile:       "yourprofile",
+		Region:        "eu-west-1",
+		MaxRecords:    25,
+		Buffer:        5,
+		ConcatRecords: true,
 	}
 	p := firehosePool.New(c)
 
@@ -54,7 +56,7 @@ func main() {
 				return
 			}
 
-			<-time.After(1 * time.Second)
+			<-time.After(400 * time.Millisecond)
 		}
 	}()
 
