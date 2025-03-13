@@ -33,8 +33,13 @@ func main() {
 		MaxRecords:    25,
 		Buffer:        5,
 		ConcatRecords: true,
+		// TODO check final values. added this
+		MinWorkers: 1,
+		MaxWorkers: 5,
 	}
 	p := firehosePool.New(c)
+	// TODO remove this sleep
+	time.Sleep(2 * time.Second)
 
 	go func() {
 
@@ -56,7 +61,8 @@ func main() {
 				return
 			}
 
-			<-time.After(400 * time.Millisecond)
+			// TODO it was 400ms
+			<-time.After(1 * time.Microsecond)
 		}
 	}()
 

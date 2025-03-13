@@ -60,9 +60,9 @@ func (srv *Server) clientsReset() (err error) {
 		log.Printf("Firehose %s clients %d, in the queue %d/%d", srv.cfg.StreamName, len(srv.clients), len(srv.C), cap(srv.C))
 	}()
 
-	// if srv.errors == 0 && srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
-	// TODO CHECK
-	if srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
+	if srv.errors == 0 && srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
+		// TODO CHECK
+		// if srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
 		log.Printf("Firehose Reload config to the stream %s", srv.cfg.StreamName)
 
 		srv.awsSvc, err = srv.Fhcg.GetClient(&srv.cfg)
@@ -70,7 +70,7 @@ func (srv *Server) clientsReset() (err error) {
 			log.Printf("firehose init error: %s", err)
 			srv.errors++
 			srv.lastError = time.Now()
-			// return err // TODO CHECK
+			return err // TODO CHECK
 		}
 
 		srv.lastConnection = time.Now()

@@ -140,7 +140,9 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		}
 
 		if srv.monad == nil {
+			log.Println("MONAD Creating")
 			srv.monad = monad.New(monadCfg)
+			log.Println("MONAD CREATED", srv.monad)
 		} else {
 			go srv.monad.Reload(monadCfg)
 		}
