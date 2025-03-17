@@ -1,4 +1,4 @@
-package firehosePool
+package firehosepool
 
 import (
 	"context"
@@ -12,16 +12,17 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/firehose"
 	"github.com/aws/aws-sdk-go-v2/service/firehose/types"
 	"github.com/aws/smithy-go"
-	"github.com/gabrielperezs/streamspooler/internal/compress"
+	"github.com/gabrielperezs/streamspooler/v2/internal/compress"
 	"github.com/gallir/bytebufferpool"
 )
 
 const (
 	recordsTimeout = 15 * time.Second
 	// TODO CHECK
-	maxRecordSize   = 1000 * 1024 // The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1024 KB
-	maxBatchRecords = 500         // The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
-	maxBatchSize    = 4 << 20     // 4 MiB per call
+	maxRecordSize = 1000 * 1024 // The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1024 KB
+	// TODO maxBattchRecords = 500
+	maxBatchRecords = 500     // The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
+	maxBatchSize    = 4 << 20 // 4 MiB per call
 
 	partialFailureWait = 200 * time.Millisecond
 	globalFailureWait  = 500 * time.Millisecond
@@ -69,6 +70,7 @@ func NewClient(srv *Server) *Client {
 		records: make([]types.Record, 0, maxBatchRecords),
 		buff:    pool.Get(),
 	}
+	clt.batch = append(clt.batch, clt.buff)
 
 	go clt.listen()
 
@@ -116,9 +118,12 @@ func (clt *Client) listen() {
 			// The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
 			// if clt.count >= clt.srv.cfg.MaxRecords || len(clt.batch) >= maxBatchRecords || clt.batchSize+recordSize+1 >= maxBatchSize {
 			// TODO CHECK
-			if len(clt.batch) >= maxBatchRecords || clt.batchSize+recordSize+1 >= maxBatchSize {
-				log.Printf("flush: count %d/%d | batch %d/%d | size [%d] %d/%d",
-					clt.count, clt.srv.cfg.MaxRecords, len(clt.batch), maxBatchRecords, recordSize, (clt.batchSize+recordSize+1)/1024, maxBatchSize/1024)
+			if len(clt.batch) >= maxBatchRecords || clt.exceedsMaxBatchSize(recordSize) {
+				log.Printf("#%d flushing maxBatchSize/MaxBatchRecords: count %d/%d | batch %d/%d | size [%d B] %d/%d kiB",
+					clt.ID,
+					clt.count, clt.srv.cfg.MaxRecords,
+					len(clt.batch), maxBatchRecords,
+					recordSize, clt.totalBatchSize()/1024, maxBatchSize/1024)
 				// Force flush
 				clt.flush()
 			}
@@ -128,37 +133,43 @@ func (clt *Client) listen() {
 				if clt.buff.Len() > 0 {
 					// Save in new record
 					// TODO debug print
-					log.Printf("Appending new record size %d/%d, count %d/%d", clt.buff.Len(), maxRecordSize, clt.count, clt.srv.cfg.MaxRecords)
-					buff := clt.buff
-					clt.batch = append(clt.batch, buff)
+					log.Printf("Appending new record size %d/%d kiB, line count %d/%d", clt.buff.Len()/1024, maxRecordSize/1024, clt.count, clt.srv.cfg.MaxRecords)
+					clt.batchSize += clt.buff.Len()
 					clt.buff = pool.Get()
-					clt.count = 0 // TODO CHECK
+					clt.batch = append(clt.batch, clt.buff)
+					clt.count = 0 // TODO CHECK the meaning of this count. Now is lines count
 				}
 			}
 
 			clt.buff.Write(r)
 			clt.buff.Write(newLine)
 
-			clt.batchSize += clt.buff.Len()
-			log.Printf("ID %d Wrote record to buff - batch num #%d/%d, record count %d/%d recordsize %d/%d batchsize %d/%d err %d\n",
+			log.Printf("ID %d Wrote record to buff - batch record num #%d/%d, line count %d/%d recordsize %d/%dkiB batchsize %d/%d kiB err %d\n",
 				clt.ID,
 				len(clt.batch), maxBatchRecords,
-				clt.count, clt.srv.cfg.MaxRecords, clt.buff.Len(), maxRecordSize, clt.batchSize, maxBatchSize,
+				clt.count, clt.srv.cfg.MaxRecords,
+				clt.buff.Len()/1024, maxRecordSize/1024,
+				clt.totalBatchSize()/1024, maxBatchSize/1024,
 				clt.srv.errors)
 
-			if len(clt.batch)+1 >= maxBatchRecords || clt.batchSize >= maxBatchSize {
-				clt.flush()
-			}
+			// if len(clt.batch)+1 >= maxBatchRecords || clt.batchSize >= maxBatchSize {
+			// 	log.Println("Flushing matxbatChrecords/maxBatchSize")
+			// 	clt.flush()
+			// }
 
 		case <-clt.t.C:
+			log.Printf("Flushing timer")
 			clt.flush()
-			if clt.buff.Len() > 0 {
-				buff := clt.buff
-				clt.batch = append(clt.batch, buff)
-				clt.buff = pool.Get()
-				clt.flush()
-			}
+			// TODO check not needed, because the flush now includes the current buff
+			// if clt.buff.Len() > 0 {
+			// 	buff := clt.buff
+			// 	clt.batch = append(clt.batch, buff)
+			// 	clt.buff = pool.Get()
+			// 	log.Printf("Flushing timer again?")
+			// 	clt.flush()
+			// }
 		case f := <-clt.finish:
+			log.Printf("Flushing finish")
 			//Stop and drain the timer channel
 			if f && !clt.t.Stop() {
 				select {
@@ -168,15 +179,18 @@ func (clt *Client) listen() {
 			}
 
 			var err error
-			if clt.buff.Len() > 0 {
-				// TODO check: no need to flush on client finish. Always error.
-				// if len(clt.batch) >= maxBatchRecords {
-				// 	err = clt.flush()
-				// }
-				clt.batch = append(clt.batch, clt.buff)
-				clt.buff = pool.Get() // Get a new pool in case is only a flush
-			}
+			// if clt.buff.Len() > 0 {
+			// 	// TODO check: no need to flush on client finish. Always error.
+			// 	if len(clt.batch) >= maxBatchRecords {
+			// 		clt.flush()
+			// 	}
+			// 	clt.batch = append(clt.batch, clt.buff)
+			// 	clt.buff = pool.Get() // Get a new pool in case is only a flush
+			// }
 			err = clt.flush()
+			if err != nil {
+				log.Printf("Error flushing on finish: %s", err)
+			}
 
 			if f {
 				// Have to finish
@@ -202,8 +216,20 @@ func (clt *Client) listen() {
 	}
 }
 
+func (clt *Client) exceedsMaxBatchSize(recordSize int) bool {
+	return clt.totalBatchSize()+recordSize+1 >= maxBatchSize
+
+}
+
+func (clt *Client) totalBatchSize() int {
+	return clt.batchSize + clt.buff.Len()
+}
+
 // flush build the last record if need and send the records slice to AWS Firehose
 func (clt *Client) flush() error {
+	// log.Println("FLUSHING SLEEP", clt.ID)
+	// time.Sleep(10 * time.Second)
+	log.Println("CONTINUE FLUSHING", clt.ID)
 
 	if !clt.t.Stop() {
 		select {
@@ -226,10 +252,12 @@ func (clt *Client) flush() error {
 	}
 
 	// Create slice with the struct need by firehose
+	var totalSize int
 	for _, b := range clt.batch {
 		clt.records = append(clt.records, types.Record{
 			Data: b.B,
 		})
+		totalSize += b.Len()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
@@ -240,6 +268,12 @@ func (clt *Client) flush() error {
 		DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
 		Records:            clt.records,
 	})
+	log.Printf("#%d flushed: count %d/%d | batch %d/%d | size %d/%d KiB err %v, output %#+v\n",
+		clt.ID,
+		clt.count,
+		clt.srv.cfg.MaxRecords, len(clt.records),
+		maxBatchRecords, totalSize/1024, maxBatchSize/1024,
+		err, output)
 
 	if err != nil {
 		if clt.srv.cfg.OnFHError != nil {
@@ -250,10 +284,11 @@ func (clt *Client) flush() error {
 			log.Printf("Firehose client %s [%d]: ERROR ThrottlingException: %s", clt.srv.cfg.StreamName, clt.ID, err)
 		} else {
 			log.Printf("Firehose client %s [%d]: ERROR PutRecordBatch: %s", clt.srv.cfg.StreamName, clt.ID, err)
-			var totalSize int
-			for _, b := range clt.batch {
-				totalSize += b.Len()
-			}
+			// TODO check
+			// var totalSize int
+			// for _, b := range clt.batch {
+			// 	totalSize += b.Len()
+			// }
 			log.Printf("Firehose client %s [%d]: DEBUG: Records %d, Bytes %d", clt.srv.cfg.StreamName, clt.ID, len(clt.batch), totalSize)
 		}
 		clt.srv.failure()
@@ -308,11 +343,13 @@ func (clt *Client) flush() error {
 		pool.Put(b)
 	}
 
-	clt.batchSize = 0
 	clt.count = 0
-	// TODO CHECK
+	clt.batchSize = 0
 	clt.batch = clt.batch[:0]
 	clt.records = clt.records[:0]
+	clt.buff = pool.Get()
+	clt.batch = append(clt.batch, clt.buff)
+	log.Printf("Reset after flush: count %d, batch %d, size %d", clt.count, len(clt.batch), clt.batchSize)
 
 	return err
 }

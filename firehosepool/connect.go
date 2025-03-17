@@ -1,6 +1,7 @@
-package firehosePool
+package firehosepool
 
 import (
+	"fmt"
 	"log"
 	"time"
 )
@@ -51,6 +52,22 @@ func (srv *Server) failure() {
 	}
 }
 
+func (srv *Server) fhClientReset(cfg *Config) (err error) {
+	if srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
+		log.Printf("creating new firehose client for the stream %s ...", srv.cfg.StreamName)
+
+		srv.awsSvc, err = srv.Fhcg.GetClient(cfg)
+		if err != nil {
+			err = fmt.Errorf("firehose init error: %w", err)
+			srv.errors++
+			srv.lastError = time.Now()
+			return
+		}
+		srv.lastConnection = time.Now()
+	}
+	return
+}
+
 func (srv *Server) clientsReset() (err error) {
 	srv.Lock()
 	defer srv.Unlock()
@@ -59,23 +76,6 @@ func (srv *Server) clientsReset() (err error) {
 	defer func() {
 		log.Printf("Firehose %s clients %d, in the queue %d/%d", srv.cfg.StreamName, len(srv.clients), len(srv.C), cap(srv.C))
 	}()
-
-	if srv.errors == 0 && srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
-		// TODO CHECK
-		// if srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
-		log.Printf("Firehose Reload config to the stream %s", srv.cfg.StreamName)
-
-		srv.awsSvc, err = srv.Fhcg.GetClient(&srv.cfg)
-		if err != nil {
-			log.Printf("firehose init error: %s", err)
-			srv.errors++
-			srv.lastError = time.Now()
-			return err // TODO CHECK
-		}
-
-		srv.lastConnection = time.Now()
-		srv.errors = 0
-	}
 
 	currClients := len(srv.clients)
 

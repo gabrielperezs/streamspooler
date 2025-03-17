@@ -1,12 +1,13 @@
-package kinesisPool
+package firehosepool
 
 import (
+	"errors"
 	"log"
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/service/kinesis"
-	"github.com/gabrielperezs/monad"
+	"github.com/aws/aws-sdk-go-v2/service/firehose"
+	"github.com/gabrielperezs/streamspooler/v2/monad"
 )
 
 const (
@@ -21,6 +22,7 @@ const (
 // Config is the general configuration for the server
 type Config struct {
 	// Internal clients details
+	MinWorkers      int
 	MaxWorkers      int
 	ThresholdWarmUp float64
 	Interval        time.Duration
@@ -30,14 +32,17 @@ type Config struct {
 
 	// Limits
 	Buffer        int
-	ConcatRecords bool // Contact many rows in one Kinesis record
+	ConcatRecords bool // Contact many rows in one firehose record
 	MaxRecords    int  // To send in batch to Kinesis
 	Compress      bool // Compress records with snappy
 
 	// Authentication and enpoints
-	StreamName string // Kinesis/Kinesis stream name
+	StreamName string // Kinesis/Firehose stream name
 	Region     string // AWS region
 	Profile    string // AWS Profile name
+	Endpoint   string // AWS endpoint
+
+	OnFHError func(e error)
 }
 
 type Server struct {
@@ -54,30 +59,35 @@ type Server struct {
 	chDone   chan bool
 	exiting  bool
 
-	awsSvc         *kinesis.Client
+	awsSvc         *firehose.Client
 	lastConnection time.Time
 	lastError      time.Time
 	errors         int64
+	Fhcg           ClientGetter
 }
 
 // New create a pool of workers
-func New(cfg Config) *Server {
+func New(cfg Config) (*Server, error) {
 
 	if cfg.Buffer == 0 {
 		cfg.Buffer = defaultBufferSize
 	}
 
 	srv := &Server{
-		chDone:   make(chan bool),
-		chReload: make(chan bool),
+		chDone:   make(chan bool, 1),
+		chReload: make(chan bool, 1),
 		C:        make(chan interface{}, cfg.Buffer),
+		Fhcg:     &FHClientGetter{},
 	}
 
 	go srv._reload()
 
-	srv.Reload(&cfg)
+	err := srv.Reload(&cfg)
+	if err != nil {
+		return nil, err
+	}
 
-	return srv
+	return srv, nil
 }
 
 // Reload the configuration
@@ -85,6 +95,10 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	srv.Lock()
 	defer srv.Unlock()
 
+	if err = srv.fhClientReset(cfg); err != nil {
+		log.Printf("Reload aborted due to firehose client error: %s", err)
+		return
+	}
 	srv.cfg = *cfg
 
 	if srv.cfg.MaxWorkers == 0 {
@@ -103,46 +117,50 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		srv.cfg.MaxRecords = defaultMaxRecords
 	}
 
-	monadCfg := &monad.Config{
-		Min:            uint64(1),
-		Max:            uint64(srv.cfg.MaxWorkers),
-		Interval:       srv.cfg.Interval,
-		CoolDownPeriod: srv.cfg.CoolDownPeriod,
-		WarmFn: func() bool {
-			if srv.cliDesired == 0 {
-				return true
-			}
+	if srv.cfg.MaxWorkers > srv.cfg.MinWorkers {
+		monadCfg := &monad.Config{
+			Min:            uint64(1),
+			Max:            uint64(srv.cfg.MaxWorkers),
+			Interval:       srv.cfg.Interval,
+			CoolDownPeriod: srv.cfg.CoolDownPeriod,
+			WarmFn: func() bool {
+				if srv.cliDesired == 0 {
+					return true
+				}
 
-			l := float64(len(srv.C))
-			if l == 0 {
-				return false
-			}
+				l := float64(len(srv.C))
+				if l == 0 {
+					return false
+				}
 
-			currPtc := (l / float64(cap(srv.C))) * 100
+				currPtc := (l / float64(cap(srv.C))) * 100
 
-			//log.Printf("Debug: Queue %v, Chan %v%%/%v, Limit: %v%%", l, currPtc, cap(srv.C), srv.cfg.ThresholdWarmUp*100)
+				return currPtc > srv.cfg.ThresholdWarmUp*100
+			},
+			DesireFn: func(n uint64) {
+				srv.cliDesired = int(n)
+				select {
+				case srv.chReload <- true:
+				default:
+				}
+			},
+		}
 
-			if currPtc > srv.cfg.ThresholdWarmUp*100 {
-				return true
-			}
-			return false
-		},
-		DesireFn: func(n uint64) {
-			srv.cliDesired = int(n)
-			select {
-			case srv.chReload <- true:
-			default:
-			}
-		},
-	}
-
-	if srv.monad == nil {
-		srv.monad = monad.New(monadCfg)
+		if srv.monad == nil {
+			log.Println("MONAD Creating")
+			srv.monad = monad.New(monadCfg)
+			log.Println("MONAD CREATED", srv.monad)
+		} else {
+			go srv.monad.Reload(monadCfg)
+		}
 	} else {
-		go srv.monad.Reload(monadCfg)
+		srv.cliDesired = srv.cfg.MaxWorkers
+		for len(srv.clients) < srv.cliDesired {
+			srv.clients = append(srv.clients, NewClient(srv))
+		}
 	}
 
-	log.Printf("Kinesis config: %#v", srv.cfg)
+	log.Printf("Firehose config: %#v", srv.cfg)
 
 	select {
 	case srv.chReload <- true:
@@ -152,10 +170,36 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	return nil
 }
 
+// Flush terminate all clients and close the channels
+func (srv *Server) Flush() (err error) {
+	srv.Lock()
+	defer srv.Unlock()
+
+	if srv.exiting {
+		return nil
+	}
+
+	for _, c := range srv.clients {
+		c.finish <- false // It will flush
+	}
+
+	for _, c := range srv.clients {
+		f := <-c.flushed
+		if !f {
+			return errors.New("flushed failed")
+		}
+	}
+
+	return
+}
+
 // Exit terminate all clients and close the channels
 func (srv *Server) Exit() {
-
 	srv.Lock()
+	if srv.exiting {
+		srv.Unlock()
+		return
+	}
 	srv.exiting = true
 	srv.Unlock()
 
@@ -170,7 +214,7 @@ func (srv *Server) Exit() {
 	}
 
 	if len(srv.C) > 0 {
-		log.Printf("Kinesis: messages lost %d", len(srv.C))
+		log.Printf("Firehose: messages lost %d", len(srv.C))
 	}
 
 	close(srv.C)
@@ -183,11 +227,7 @@ func (srv *Server) isExiting() bool {
 	srv.Lock()
 	defer srv.Unlock()
 
-	if srv.exiting {
-		return true
-	}
-
-	return false
+	return srv.exiting
 }
 
 // Waiting to the server if is running
