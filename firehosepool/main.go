@@ -103,6 +103,10 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		srv.cfg.MaxWorkers = defaultMaxWorkers
 	}
 
+	if srv.cfg.MinWorkers == 0 {
+		srv.cfg.MinWorkers = 1
+	}
+
 	if srv.cfg.ThresholdWarmUp == 0 {
 		srv.cfg.ThresholdWarmUp = defaultThresholdWarmUp
 	}
@@ -117,7 +121,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 
 	if srv.cfg.MaxWorkers > srv.cfg.MinWorkers {
 		monadCfg := &monad.Config{
-			Min:            uint64(1),
+			Min:            uint64(srv.cfg.MinWorkers),
 			Max:            uint64(srv.cfg.MaxWorkers),
 			Interval:       srv.cfg.Interval,
 			CoolDownPeriod: srv.cfg.CoolDownPeriod,
@@ -132,6 +136,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 				}
 
 				currPtc := (l / float64(cap(srv.C))) * 100
+				log.Printf("Firehose WarmFn: %d/%d (%.2f%%)", len(srv.C), cap(srv.C), currPtc)
 
 				return currPtc > srv.cfg.ThresholdWarmUp*100
 			},
@@ -145,17 +150,15 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		}
 
 		if srv.monad == nil {
-			log.Println("MONAD Creating")
 			srv.monad = monad.New(monadCfg)
-			log.Println("MONAD CREATED", srv.monad)
 		} else {
 			go srv.monad.Reload(monadCfg)
 		}
 	} else {
 		srv.cliDesired = srv.cfg.MaxWorkers
-		for len(srv.clients) < srv.cliDesired {
-			srv.clients = append(srv.clients, NewClient(srv))
-		}
+		// for len(srv.clients) < srv.cliDesired {
+		// 	srv.clients = append(srv.clients, NewClient(srv))
+		// }
 	}
 
 	log.Printf("Firehose config: %#v", srv.cfg)
@@ -170,10 +173,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 
 // Flush terminate all clients and close the channels
 func (srv *Server) Flush() (err error) {
-	srv.Lock()
-	defer srv.Unlock()
-
-	if srv.exiting {
+	if srv.isExiting() {
 		return nil
 	}
 
@@ -224,7 +224,6 @@ func (srv *Server) Exit() {
 func (srv *Server) isExiting() bool {
 	srv.Lock()
 	defer srv.Unlock()
-
 	return srv.exiting
 }
 

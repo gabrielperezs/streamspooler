@@ -80,7 +80,6 @@ func NewClient(srv *Server) *Client {
 func (clt *Client) listen() {
 	log.Printf("Firehose client %s [%d]: ready", clt.srv.cfg.StreamName, clt.ID)
 	for {
-
 		select {
 		case ri := <-clt.srv.C:
 
@@ -166,14 +165,7 @@ func (clt *Client) listen() {
 		case <-clt.t.C:
 			log.Printf("Flushing timer")
 			clt.flush()
-			// TODO check not needed, because the flush now includes the current buff
-			// if clt.buff.Len() > 0 {
-			// 	buff := clt.buff
-			// 	clt.batch = append(clt.batch, buff)
-			// 	clt.buff = pool.Get()
-			// 	log.Printf("Flushing timer again?")
-			// 	clt.flush()
-			// }
+
 		case f := <-clt.finish:
 			log.Printf("#%d Flushing finish", clt.ID)
 			//Stop and drain the timer channel
@@ -185,22 +177,16 @@ func (clt *Client) listen() {
 			}
 
 			var err error
-			// if clt.buff.Len() > 0 {
-			// 	// TODO check: no need to flush on client finish. Always error.
-			// 	if len(clt.batch) >= maxBatchRecords {
-			// 		clt.flush()
-			// 	}
-			// 	clt.batch = append(clt.batch, clt.buff)
-			// 	clt.buff = pool.Get() // Get a new pool in case is only a flush
-			// }
 			err = clt.flush()
+
 			if err != nil {
 				log.Printf("Error flushing on finish: %s", err)
 			}
+			log.Printf("Firehose client finish flushed. signaling done f=%t", f)
 
 			if f {
 				// Have to finish
-				if l := len(clt.batch); l > 0 {
+				if l := clt.batchRecords(); l > 0 {
 					log.Printf("Firehose client %s [%d]: Exit, %d records lost", clt.srv.cfg.StreamName, clt.ID, l)
 					clt.done <- false // WARN: To avoid blocking the processs
 					return
@@ -215,20 +201,28 @@ func (clt *Client) listen() {
 			if l := len(clt.batch); l > 0 || err != nil {
 				log.Printf("Firehose client %s [%d]: Flush, %d records pending", clt.srv.cfg.StreamName, clt.ID, l)
 				clt.flushed <- false // WARN: To avoid blocking the processs
-				return
+			} else {
+				clt.flushed <- true
 			}
-			clt.flushed <- true
 		}
 	}
 }
 
 func (clt *Client) exceedsMaxBatchSize(recordSize int) bool {
 	return clt.totalBatchSize()+recordSize+1 >= maxBatchSize
-
 }
 
 func (clt *Client) totalBatchSize() int {
 	return clt.batchSize + clt.buff.Len()
+}
+
+func (clt *Client) batchRecords() int {
+
+	if clt.totalBatchSize() == 0 {
+		return 0
+	}
+
+	return len(clt.batch)
 }
 
 // flush build the last record if need and send the records slice to AWS Firehose
@@ -242,9 +236,8 @@ func (clt *Client) flush() error {
 	}
 	clt.t.Reset(recordsTimeout)
 
-	size := len(clt.batch)
 	// Don't send empty batch
-	if size == 0 {
+	if clt.totalBatchSize() == 0 {
 		return nil
 	}
 
@@ -255,12 +248,10 @@ func (clt *Client) flush() error {
 	}
 
 	// Create slice with the struct need by firehose
-	var totalSize int
 	for _, b := range clt.batch {
 		clt.records = append(clt.records, types.Record{
 			Data: b.B,
 		})
-		totalSize += b.Len()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
@@ -271,11 +262,12 @@ func (clt *Client) flush() error {
 		DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
 		Records:            clt.records,
 	})
-	log.Printf("#%d flushed: count %d/%d | batch %d/%d | size %d/%d KiB (err %v)\n",
+	log.Printf("Firehose client %s [%d]: DEBUG: flushed: count %d/%d | batch %d/%d | size %d/%d B (err %v)\n",
+		clt.srv.cfg.StreamName,
 		clt.ID,
 		clt.count,
 		clt.srv.cfg.MaxRecords, len(clt.records),
-		maxBatchRecords, totalSize/1024, maxBatchSize/1024,
+		maxBatchRecords, clt.totalBatchSize(), maxBatchSize,
 		err)
 
 	if err != nil {
@@ -287,12 +279,6 @@ func (clt *Client) flush() error {
 			log.Printf("Firehose client %s [%d]: ERROR ThrottlingException: %s", clt.srv.cfg.StreamName, clt.ID, err)
 		} else {
 			log.Printf("Firehose client %s [%d]: ERROR PutRecordBatch: %s", clt.srv.cfg.StreamName, clt.ID, err)
-			// TODO check
-			// var totalSize int
-			// for _, b := range clt.batch {
-			// 	totalSize += b.Len()
-			// }
-			log.Printf("Firehose client %s [%d]: DEBUG: Records %d, Bytes %d", clt.srv.cfg.StreamName, clt.ID, len(clt.batch), totalSize)
 		}
 		clt.srv.failure()
 
@@ -305,7 +291,7 @@ func (clt *Client) flush() error {
 			if !clt.srv.cfg.Critical && atomic.LoadInt64(&clt.onFlyRetry) > onFlyRetryLimit {
 				log.Printf("Firehose client %s [%d]: ERROR maximum of batch records retrying (%d): %s",
 					clt.srv.cfg.StreamName, clt.ID, onFlyRetryLimit, err)
-				continue
+				break
 			}
 
 			// Sending back to channel, it will run a goroutine
@@ -363,17 +349,20 @@ func (clt *Client) Exit() {
 }
 
 func (clt *Client) retry(orig []byte) {
+	if len(orig) == 0 {
+		return
+	}
+	if clt.srv.isExiting() {
+		return
+	}
 	// Remove the last byte, is a newLine
 	b := make([]byte, len(orig)-len(newLine))
 	copy(b, orig[:len(orig)-len(newLine)])
 
 	go func(b []byte) {
-		if clt.srv.isExiting() {
-			log.Printf("client retry: skip, server is exiting")
-			return
-		}
 		atomic.AddInt64(&clt.onFlyRetry, 1)
 		defer atomic.AddInt64(&clt.onFlyRetry, -1)
 		clt.srv.C <- b
+		log.Printf("Firehose client %s [%d]: retrying record", clt.srv.cfg.StreamName, clt.ID)
 	}(b)
 }

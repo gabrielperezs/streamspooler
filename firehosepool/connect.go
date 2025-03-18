@@ -28,23 +28,23 @@ func (srv *Server) _reload() {
 }
 
 func (srv *Server) failure() {
-	log.Println("MARK FAILURE")
+	// log.Println("MARK FAILURE ...")
 	if srv.isExiting() {
 		return
 	}
 
 	srv.Lock()
-	defer srv.Unlock()
-
 	if time.Since(srv.lastError) > errorsFrame {
 		srv.errors = 0
 	}
-
 	srv.errors++
+	reload := srv.errors > maxErrors
 	srv.lastError = time.Now()
+	srv.Unlock()
+
 	log.Printf("Firehose: %d errors detected", srv.errors)
 
-	if srv.errors > maxErrors {
+	if reload {
 		select {
 		case srv.chReload <- true:
 		default:
@@ -78,7 +78,7 @@ func (srv *Server) fhClientReset(cfg *Config) (err error) {
 func (srv *Server) clientsReset() (err error) {
 	srv.Lock()
 	defer srv.Unlock()
-	log.Println("Firehose: RELOADING clients unlocked")
+	log.Println("Firehose: RELOADING clients")
 
 	defer func() {
 		log.Printf("Firehose %s clients %d, in the queue %d/%d", srv.cfg.StreamName, len(srv.clients), len(srv.C), cap(srv.C))

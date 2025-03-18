@@ -37,14 +37,15 @@ func RandStringRunes(n int) string {
 	return string(b)
 }
 
-func TestPutRecordBatchThrottling(t *testing.T) {
+func TestTrottlingError(t *testing.T) {
 
 	c := Config{
-		StreamName:     "firehoseStreamName",
-		Region:         "eu-west-1",
-		MaxRecords:     4,
+		StreamName: "firehoseStreamName",
+		Region:     "eu-west-1",
+		// MaxRecords:     4,
 		MinWorkers:     1,
 		MaxWorkers:     1,
+		Buffer:         0,
 		FHClientGetter: &mockedClient{},
 	}
 	p, err := New(c)
@@ -52,32 +53,25 @@ func TestPutRecordBatchThrottling(t *testing.T) {
 		t.Fatalf("Firehose: %s\n", err)
 	}
 
-	go func() {
-		for i := 0; i < 10; i++ {
-			r, err := ffjson.Marshal(&record{
-				TS: int64(time.Now().UnixNano() / int64(time.Millisecond)),
-				S:  fmt.Sprintf("%s: %s", "testing bytes: Testing", RandStringRunes(10)),
-			})
+	r, _ := ffjson.Marshal(&record{
+		TS: int64(time.Now().UnixNano() / int64(time.Millisecond)),
+		S:  "testing msg",
+	})
 
-			if err != nil {
-				log.Panicf("E: %s", err)
-			}
+	p.C <- r
+	log.Printf("test message sent")
 
-			select {
-			case p.C <- r:
-				fmt.Println("sent ", i)
-			default:
-				log.Printf("Channel closed or full")
-			}
-		}
-	}()
+	for trials := 0; len(p.clients) == 0 && trials < 5; trials++ {
+		time.Sleep(1 * time.Second)
+	}
+	if len(p.clients) == 0 {
+		t.Fatalf("Firehose: no client created\n")
+	}
 
-	go func() {
-		<-time.After(2 * time.Second)
-		p.Exit()
-	}()
-
-	p.Waiting()
+	err = p.Flush()
+	if err == nil {
+		t.Fatal("No Thottle error received")
+	}
 
 	if numReq.Load() == 0 {
 		t.Fatalf("Firehose: no AWS Requests made\n")
@@ -88,13 +82,80 @@ func TestPutRecordBatchThrottling(t *testing.T) {
 		t.Fatalf("Firehose: errors %d\n", p.errors)
 	}
 
+	p.Exit()
+
+	p.Waiting()
+
 	if p.errors < numReq.Load()-1 {
 		t.Fatalf("Firehose: errors %d < requests -1  (%d)\n", p.errors, numReq.Load()-1)
 	}
 	fmt.Printf("Firehose mocked requests received: %d\n", numReq.Load())
 	fmt.Printf("Firehose srv forced errors count: %d\n", p.errors)
-	fmt.Printf("Firehose messages lost (normal due to exit): %d\n", len(p.C))
 }
+
+// func TestPutRecordBatchThrottling(t *testing.T) {
+
+// 	c := Config{
+// 		StreamName: "firehoseStreamName",
+// 		Region:     "eu-west-1",
+// 		// MaxRecords:     4,
+// 		MinWorkers:     1,
+// 		MaxWorkers:     1,
+// 		FHClientGetter: &mockedClient{},
+// 	}
+// 	p, err := New(c)
+// 	if err != nil {
+// 		t.Fatalf("Firehose: %s\n", err)
+// 	}
+
+// 	go func() {
+// 		for i := 0; i < 10; i++ {
+// 			r, err := ffjson.Marshal(&record{
+// 				TS: int64(time.Now().UnixNano() / int64(time.Millisecond)),
+// 				S:  fmt.Sprintf("%s: %s", "testing bytes: Testing", RandStringRunes(10)),
+// 			})
+
+// 			if err != nil {
+// 				log.Panicf("E: %s", err)
+// 			}
+
+// 			select {
+// 			case p.C <- r:
+// 				fmt.Println("sent ", i)
+// 			default:
+// 				log.Printf("Channel closed or full")
+// 			}
+// 		}
+// 	}()
+
+// 	go func() {
+// 		<-time.After(1 * time.Second)
+// 		p.Flush()
+// 	}()
+
+// 	go func() {
+// 		<-time.After(2 * time.Second)
+// 		p.Exit()
+// 	}()
+
+// 	p.Waiting()
+
+// 	if numReq.Load() == 0 {
+// 		t.Fatalf("Firehose: no AWS Requests made\n")
+// 	}
+
+// 	if p.errors == 0 {
+// 		// should do some errors and retries, due to forced throttling error
+// 		t.Fatalf("Firehose: errors %d\n", p.errors)
+// 	}
+
+// 	if p.errors < numReq.Load()-1 {
+// 		t.Fatalf("Firehose: errors %d < requests -1  (%d)\n", p.errors, numReq.Load()-1)
+// 	}
+// 	fmt.Printf("Firehose mocked requests received: %d\n", numReq.Load())
+// 	fmt.Printf("Firehose srv forced errors count: %d\n", p.errors)
+// 	fmt.Printf("Firehose messages lost (normal due to exit): %d\n", len(p.C))
+// }
 
 type mockedClient struct{}
 
