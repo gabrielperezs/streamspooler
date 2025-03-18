@@ -133,7 +133,13 @@ func (clt *Client) listen() {
 				if clt.buff.Len() > 0 {
 					// Save in new record
 					// TODO debug print
-					log.Printf("Appending new record size %d/%d kiB, line count %d/%d", clt.buff.Len()/1024, maxRecordSize/1024, clt.count, clt.srv.cfg.MaxRecords)
+					// log.Printf("#%d Appending record %d/%d  size %d/%d kiB, line count %d/%d batchsize %d/%d kiB",
+					// 	clt.ID,
+					// 	len(clt.batch), maxBatchRecords,
+					// 	clt.buff.Len()/1024, maxRecordSize/1024,
+					// 	clt.count, clt.srv.cfg.MaxRecords,
+					// 	clt.totalBatchSize()/1024, maxBatchSize/1024,
+					// )
 					clt.batchSize += clt.buff.Len()
 					clt.buff = pool.Get()
 					clt.batch = append(clt.batch, clt.buff)
@@ -144,13 +150,13 @@ func (clt *Client) listen() {
 			clt.buff.Write(r)
 			clt.buff.Write(newLine)
 
-			log.Printf("ID %d Wrote record to buff - batch record num #%d/%d, line count %d/%d recordsize %d/%dkiB batchsize %d/%d kiB err %d\n",
-				clt.ID,
-				len(clt.batch), maxBatchRecords,
-				clt.count, clt.srv.cfg.MaxRecords,
-				clt.buff.Len()/1024, maxRecordSize/1024,
-				clt.totalBatchSize()/1024, maxBatchSize/1024,
-				clt.srv.errors)
+			// log.Printf("ID %d Wrote record to buff - batch record num #%d/%d, line count %d/%d recordsize %d/%dkiB batchsize %d/%d kiB err %d\n",
+			// 	clt.ID,
+			// 	len(clt.batch), maxBatchRecords,
+			// 	clt.count, clt.srv.cfg.MaxRecords,
+			// 	clt.buff.Len()/1024, maxRecordSize/1024,
+			// 	clt.totalBatchSize()/1024, maxBatchSize/1024,
+			// 	clt.srv.errors)
 
 			// if len(clt.batch)+1 >= maxBatchRecords || clt.batchSize >= maxBatchSize {
 			// 	log.Println("Flushing matxbatChrecords/maxBatchSize")
@@ -169,7 +175,7 @@ func (clt *Client) listen() {
 			// 	clt.flush()
 			// }
 		case f := <-clt.finish:
-			log.Printf("Flushing finish")
+			log.Printf("#%d Flushing finish", clt.ID)
 			//Stop and drain the timer channel
 			if f && !clt.t.Stop() {
 				select {
@@ -227,9 +233,6 @@ func (clt *Client) totalBatchSize() int {
 
 // flush build the last record if need and send the records slice to AWS Firehose
 func (clt *Client) flush() error {
-	// log.Println("FLUSHING SLEEP", clt.ID)
-	// time.Sleep(10 * time.Second)
-	log.Println("CONTINUE FLUSHING", clt.ID)
 
 	if !clt.t.Stop() {
 		select {
@@ -268,12 +271,12 @@ func (clt *Client) flush() error {
 		DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
 		Records:            clt.records,
 	})
-	log.Printf("#%d flushed: count %d/%d | batch %d/%d | size %d/%d KiB err %v, output %#+v\n",
+	log.Printf("#%d flushed: count %d/%d | batch %d/%d | size %d/%d KiB (err %v)\n",
 		clt.ID,
 		clt.count,
 		clt.srv.cfg.MaxRecords, len(clt.records),
 		maxBatchRecords, totalSize/1024, maxBatchSize/1024,
-		err, output)
+		err)
 
 	if err != nil {
 		if clt.srv.cfg.OnFHError != nil {
@@ -349,7 +352,6 @@ func (clt *Client) flush() error {
 	clt.records = clt.records[:0]
 	clt.buff = pool.Get()
 	clt.batch = append(clt.batch, clt.buff)
-	log.Printf("Reset after flush: count %d, batch %d, size %d", clt.count, len(clt.batch), clt.batchSize)
 
 	return err
 }

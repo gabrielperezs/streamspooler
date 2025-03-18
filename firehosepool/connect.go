@@ -56,7 +56,14 @@ func (srv *Server) fhClientReset(cfg *Config) (err error) {
 	if srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
 		log.Printf("creating new firehose client for the stream %s ...", srv.cfg.StreamName)
 
-		srv.awsSvc, err = srv.Fhcg.GetClient(cfg)
+		var fhcg ClientGetter
+		if cfg.FHClientGetter != nil {
+			fhcg = cfg.FHClientGetter
+		} else {
+			fhcg = &FHClientGetter{}
+		}
+
+		srv.awsSvc, err = fhcg.GetClient(cfg)
 		if err != nil {
 			err = fmt.Errorf("firehose init error: %w", err)
 			srv.errors++

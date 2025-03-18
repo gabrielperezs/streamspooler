@@ -29,6 +29,7 @@ type Config struct {
 	CoolDownPeriod  time.Duration
 	Critical        bool // Handle this stream as critical
 	Serializer      func(i interface{}) ([]byte, error)
+	FHClientGetter  ClientGetter // Allow injecting a custom firehose client getter. Mostly for mock testing
 
 	// Limits
 	Buffer        int
@@ -63,7 +64,6 @@ type Server struct {
 	lastConnection time.Time
 	lastError      time.Time
 	errors         int64
-	Fhcg           ClientGetter
 }
 
 // New create a pool of workers
@@ -72,12 +72,10 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Buffer == 0 {
 		cfg.Buffer = defaultBufferSize
 	}
-
 	srv := &Server{
 		chDone:   make(chan bool, 1),
 		chReload: make(chan bool, 1),
 		C:        make(chan interface{}, cfg.Buffer),
-		Fhcg:     &FHClientGetter{},
 	}
 
 	go srv._reload()
