@@ -45,7 +45,7 @@ func TestTrottlingError(t *testing.T) {
 		// MaxRecords:     4,
 		MinWorkers:     1,
 		MaxWorkers:     1,
-		Buffer:         0,
+		Buffer:         1,
 		FHClientGetter: &mockedClient{},
 	}
 	p, err := New(c)
@@ -81,6 +81,8 @@ func TestTrottlingError(t *testing.T) {
 		// should do some errors and retries, due to forced throttling error
 		t.Fatalf("Firehose: errors %d\n", p.errors)
 	}
+
+	<-time.After(100 * time.Millisecond)
 
 	p.Exit()
 

@@ -118,11 +118,11 @@ func (clt *Client) listen() {
 			// if clt.count >= clt.srv.cfg.MaxRecords || len(clt.batch) >= maxBatchRecords || clt.batchSize+recordSize+1 >= maxBatchSize {
 			// TODO CHECK
 			if len(clt.batch) >= clt.srv.cfg.MaxRecords || clt.exceedsMaxBatchSize(recordSize) {
-				log.Printf("#%d flushing maxBatchSize/MaxBatchRecords: count %d/%d | batch %d/%d | size [%d B] %d/%d kiB",
-					clt.ID,
-					clt.lines, clt.srv.cfg.MaxConcatLines,
-					len(clt.batch), clt.srv.cfg.MaxRecords,
-					recordSize, clt.totalBatchSize()/1024, maxBatchSize/1024)
+				// log.Printf("#%d flushing maxBatchSize/MaxBatchRecords: lines %d/%d | batch %d/%d | size [%d B] %d/%d kiB",
+				// 	clt.ID,
+				// 	clt.lines, clt.srv.cfg.MaxConcatLines,
+				// 	len(clt.batch), clt.srv.cfg.MaxRecords,
+				// 	recordSize, clt.totalBatchSize()/1024, maxBatchSize/1024)
 				// Force flush
 				clt.flush()
 			}
@@ -134,9 +134,9 @@ func (clt *Client) listen() {
 					// TODO debug print
 					// log.Printf("#%d Appending record %d/%d  size %d/%d kiB, line count %d/%d batchsize %d/%d kiB",
 					// 	clt.ID,
-					// 	len(clt.batch), maxBatchRecords,
+					// 	len(clt.batch), clt.srv.cfg.MaxRecords,
 					// 	clt.buff.Len()/1024, maxRecordSize/1024,
-					// 	clt.count, clt.srv.cfg.MaxRecords,
+					// 	clt.lines, clt.srv.cfg.MaxConcatLines,
 					// 	clt.totalBatchSize()/1024, maxBatchSize/1024,
 					// )
 					clt.batchSize += clt.buff.Len()
@@ -291,6 +291,7 @@ func (clt *Client) flush() error {
 			}
 
 			// Sending back to channel, it will run a goroutine
+			log.Println("sending back to channel")
 			clt.retry(clt.batch[i].B)
 		}
 	} else if *output.FailedPutCount > 0 {
@@ -356,20 +357,29 @@ func (clt *Client) retry(orig []byte) {
 	go func(b []byte) {
 		atomic.AddInt64(&clt.onFlyRetry, 1)
 		defer atomic.AddInt64(&clt.onFlyRetry, -1)
-		var sent bool
-		clt.srv.Lock()
-		if !clt.srv.exiting {
-			select {
-			case clt.srv.C <- b:
-				sent = true
-			default:
+		var sent, exit bool
+		for {
+			// As this is a goroutine, we need to avoid a race cond of client exiting and closed channel
+			clt.srv.Lock()
+			if !clt.srv.exiting {
+				select {
+				case clt.srv.C <- b:
+					sent = true
+				default:
+				}
 			}
-		}
-		clt.srv.Unlock()
-		if sent {
-			log.Printf("Firehose client %s [%d]: record sent to retry", clt.srv.cfg.StreamName, clt.ID)
-		} else {
-			log.Printf("Firehose client %s [%d]: retrying record discarded. channel full or exiting", clt.srv.cfg.StreamName, clt.ID)
+			exit = clt.srv.exiting
+			clt.srv.Unlock()
+			if sent {
+				log.Printf("Firehose client %s [%d]: retry: record sent", clt.srv.cfg.StreamName, clt.ID)
+				return
+			}
+			if exit {
+				log.Printf("Firehose client %s [%d]: retry: client exiting, discarding", clt.srv.cfg.StreamName, clt.ID)
+				return
+			}
+			log.Printf("Firehose client %s [%d]: retry: channel full, waiting", clt.srv.cfg.StreamName, clt.ID)
+			<-time.After(1 * time.Second)
 		}
 	}(b)
 }

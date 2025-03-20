@@ -2,6 +2,7 @@ package firehosepool
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -18,6 +19,8 @@ const (
 	defaultThresholdWarmUp = 0.6
 	defaultCoolDownPeriod  = 15 * time.Second
 )
+
+var configError = errors.New("firehose config error")
 
 // Config is the general configuration for the server
 type Config struct {
@@ -93,6 +96,10 @@ func New(cfg Config) (*Server, error) {
 func (srv *Server) Reload(cfg *Config) (err error) {
 	srv.Lock()
 	defer srv.Unlock()
+
+	if cfg.Compress && cfg.ConcatRecords {
+		return fmt.Errorf("%w: cannot compress and concat records", configError)
+	}
 
 	if err = srv.fhClientReset(cfg); err != nil {
 		log.Printf("Reload aborted due to firehose client error: %s", err)
