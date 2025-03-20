@@ -14,7 +14,7 @@ const (
 	defaultBufferSize      = 1024
 	defaultWorkers         = 1
 	defaultMaxWorkers      = 10
-	defaultMaxRecords      = 500
+	defaultMaxLines        = 500
 	defaultThresholdWarmUp = 0.6
 	defaultCoolDownPeriod  = 15 * time.Second
 )
@@ -32,10 +32,11 @@ type Config struct {
 	FHClientGetter  ClientGetter // Allow injecting a custom firehose client getter. Mostly for mock testing
 
 	// Limits
-	Buffer        int
-	ConcatRecords bool // Contact many rows in one firehose record
-	MaxRecords    int  // To send in batch to Kinesis
-	Compress      bool // Compress records with snappy
+	Buffer         int
+	ConcatRecords  bool // Contact many rows in one firehose record
+	MaxConcatLines int  // Max Concat Lines per record. Default 500
+	MaxRecords     int  // Max records per batch. Max 500 (firehose hard limit), default 500
+	Compress       bool // Compress records with snappy
 
 	// Authentication and enpoints
 	StreamName string // Kinesis/Firehose stream name
@@ -115,8 +116,16 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		srv.cfg.CoolDownPeriod = defaultCoolDownPeriod
 	}
 
+	if srv.cfg.MaxConcatLines == 0 {
+		srv.cfg.MaxConcatLines = defaultMaxLines
+	}
+
 	if srv.cfg.MaxRecords == 0 {
-		srv.cfg.MaxRecords = defaultMaxRecords
+		srv.cfg.MaxRecords = maxBatchRecords
+	}
+
+	if srv.cfg.MaxRecords > 500 {
+		srv.cfg.MaxRecords = 500
 	}
 
 	if srv.cfg.MaxWorkers > srv.cfg.MinWorkers {

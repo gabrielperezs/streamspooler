@@ -42,7 +42,7 @@ type Client struct {
 	sync.Mutex
 	srv        *Server
 	buff       *bytebufferpool.ByteBuffer
-	count      int
+	lines      int
 	batch      []*bytebufferpool.ByteBuffer
 	batchSize  int
 	records    []types.Record
@@ -112,23 +112,23 @@ func (clt *Client) listen() {
 				continue
 			}
 
-			clt.count++
+			clt.lines++
 
 			// The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
 			// if clt.count >= clt.srv.cfg.MaxRecords || len(clt.batch) >= maxBatchRecords || clt.batchSize+recordSize+1 >= maxBatchSize {
 			// TODO CHECK
-			if len(clt.batch) >= maxBatchRecords || clt.exceedsMaxBatchSize(recordSize) {
+			if len(clt.batch) >= clt.srv.cfg.MaxRecords || clt.exceedsMaxBatchSize(recordSize) {
 				log.Printf("#%d flushing maxBatchSize/MaxBatchRecords: count %d/%d | batch %d/%d | size [%d B] %d/%d kiB",
 					clt.ID,
-					clt.count, clt.srv.cfg.MaxRecords,
-					len(clt.batch), maxBatchRecords,
+					clt.lines, clt.srv.cfg.MaxConcatLines,
+					len(clt.batch), clt.srv.cfg.MaxRecords,
 					recordSize, clt.totalBatchSize()/1024, maxBatchSize/1024)
 				// Force flush
 				clt.flush()
 			}
 
 			// The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1000 KB.
-			if !clt.srv.cfg.ConcatRecords || clt.buff.Len()+recordSize+1 >= maxRecordSize || clt.count >= clt.srv.cfg.MaxRecords {
+			if !clt.srv.cfg.ConcatRecords || clt.buff.Len()+recordSize+1 >= maxRecordSize || clt.lines >= clt.srv.cfg.MaxConcatLines {
 				if clt.buff.Len() > 0 {
 					// Save in new record
 					// TODO debug print
@@ -142,7 +142,7 @@ func (clt *Client) listen() {
 					clt.batchSize += clt.buff.Len()
 					clt.buff = pool.Get()
 					clt.batch = append(clt.batch, clt.buff)
-					clt.count = 0 // TODO CHECK the meaning of this count. Now is lines count
+					clt.lines = 0 // TODO CHECK the meaning of this count. Now is lines count
 				}
 			}
 
@@ -163,11 +163,9 @@ func (clt *Client) listen() {
 			// }
 
 		case <-clt.t.C:
-			log.Printf("Flushing timer")
 			clt.flush()
 
 		case f := <-clt.finish:
-			log.Printf("#%d Flushing finish", clt.ID)
 			//Stop and drain the timer channel
 			if f && !clt.t.Stop() {
 				select {
@@ -182,7 +180,6 @@ func (clt *Client) listen() {
 			if err != nil {
 				log.Printf("Error flushing on finish: %s", err)
 			}
-			log.Printf("Firehose client finish flushed. signaling done f=%t", f)
 
 			if f {
 				// Have to finish
@@ -262,12 +259,11 @@ func (clt *Client) flush() error {
 		DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
 		Records:            clt.records,
 	})
-	log.Printf("Firehose client %s [%d]: DEBUG: flushed: count %d/%d | batch %d/%d | size %d/%d B (err %v)\n",
-		clt.srv.cfg.StreamName,
-		clt.ID,
-		clt.count,
-		clt.srv.cfg.MaxRecords, len(clt.records),
-		maxBatchRecords, clt.totalBatchSize(), maxBatchSize,
+	log.Printf("Firehose client %s [%d]: DEBUG: flushed: lines %d/%d | batch %d/%d | size %d/%d B (err %v)\n",
+		clt.srv.cfg.StreamName, clt.ID,
+		clt.lines, clt.srv.cfg.MaxConcatLines,
+		len(clt.records), clt.srv.cfg.MaxRecords,
+		clt.totalBatchSize(), maxBatchSize,
 		err)
 
 	if err != nil {
@@ -291,7 +287,7 @@ func (clt *Client) flush() error {
 			if !clt.srv.cfg.Critical && atomic.LoadInt64(&clt.onFlyRetry) > onFlyRetryLimit {
 				log.Printf("Firehose client %s [%d]: ERROR maximum of batch records retrying (%d): %s",
 					clt.srv.cfg.StreamName, clt.ID, onFlyRetryLimit, err)
-				break
+				continue
 			}
 
 			// Sending back to channel, it will run a goroutine
@@ -332,7 +328,7 @@ func (clt *Client) flush() error {
 		pool.Put(b)
 	}
 
-	clt.count = 0
+	clt.lines = 0
 	clt.batchSize = 0
 	clt.batch = clt.batch[:0]
 	clt.records = clt.records[:0]
@@ -352,9 +348,7 @@ func (clt *Client) retry(orig []byte) {
 	if len(orig) == 0 {
 		return
 	}
-	if clt.srv.isExiting() {
-		return
-	}
+
 	// Remove the last byte, is a newLine
 	b := make([]byte, len(orig)-len(newLine))
 	copy(b, orig[:len(orig)-len(newLine)])
@@ -362,7 +356,20 @@ func (clt *Client) retry(orig []byte) {
 	go func(b []byte) {
 		atomic.AddInt64(&clt.onFlyRetry, 1)
 		defer atomic.AddInt64(&clt.onFlyRetry, -1)
-		clt.srv.C <- b
-		log.Printf("Firehose client %s [%d]: retrying record", clt.srv.cfg.StreamName, clt.ID)
+		var sent bool
+		clt.srv.Lock()
+		if !clt.srv.exiting {
+			select {
+			case clt.srv.C <- b:
+				sent = true
+			default:
+			}
+		}
+		clt.srv.Unlock()
+		if sent {
+			log.Printf("Firehose client %s [%d]: record sent to retry", clt.srv.cfg.StreamName, clt.ID)
+		} else {
+			log.Printf("Firehose client %s [%d]: retrying record discarded. channel full or exiting", clt.srv.cfg.StreamName, clt.ID)
+		}
 	}(b)
 }

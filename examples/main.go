@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"time"
 
-	firehosePool "github.com/gabrielperezs/streamspooler/v2/firehosepool"
+	"github.com/gabrielperezs/streamspooler/v2/firehosepool"
 	"github.com/pquerna/ffjson/ffjson"
 )
 
@@ -26,18 +26,21 @@ func RandStringRunes(n int) string {
 }
 
 func main() {
-	c := firehosePool.Config{
-		StreamName:    "webbeds-testing-stream",
-		Profile:       "yourprofile",
-		Region:        "eu-west-1",
-		MaxRecords:    25,
-		Buffer:        5,
-		ConcatRecords: true,
+	c := firehosepool.Config{
+		StreamName:     "webbeds-testing-stream",
+		Profile:        "yourprofile",
+		Region:         "eu-west-1",
+		MaxConcatLines: 25,
+		Buffer:         5,
+		ConcatRecords:  true,
 		// TODO check final values. added this
 		MinWorkers: 1,
 		MaxWorkers: 5,
 	}
-	p := firehosePool.New(c)
+	p, err := firehosepool.New(c)
+	if err != nil {
+		log.Fatalf("Error starting firehose: %s\n", err)
+	}
 	// TODO remove this sleep
 	time.Sleep(2 * time.Second)
 
@@ -57,7 +60,7 @@ func main() {
 			case p.C <- r:
 				fmt.Printf("Record sent\n")
 			default:
-				log.Printf("Channel closed or full")
+				log.Printf("Channel full")
 				return
 			}
 
