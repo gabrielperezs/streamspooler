@@ -18,21 +18,26 @@ const (
 	defaultMaxLines        = 500
 	defaultThresholdWarmUp = 0.6
 	defaultCoolDownPeriod  = 15 * time.Second
+	defaultFlushTimeout    = 15 * time.Second
+	defaultFlushCron       = 59*time.Minute + 30*time.Second
 )
 
-var configError = errors.New("firehose config error")
+var ErrConfig = errors.New("firehose config error")
 
 // Config is the general configuration for the server
 type Config struct {
-	// Internal clients details
+	// Internal workers details
 	MinWorkers      int
 	MaxWorkers      int
 	ThresholdWarmUp float64
-	Interval        time.Duration
+	Interval        time.Duration // Interval for monad workers evaluation period. Default 500ms
 	CoolDownPeriod  time.Duration
 	Critical        bool // Handle this stream as critical
 	Serializer      func(i interface{}) ([]byte, error)
-	FHClientGetter  ClientGetter // Allow injecting a custom firehose client getter. Mostly for mock testing
+
+	// Flush timers
+	FlushTimeout time.Duration // Max time between flushes. Will force a flush after 15m
+	FlushCron    time.Duration // Hourly Cron for flushing. "59m10s" would tick hourly at 59:10. Default to "59m30s"
 
 	// Limits
 	Buffer         int
@@ -41,11 +46,12 @@ type Config struct {
 	MaxRecords     int  // Max records per batch. Max 500 (firehose hard limit), default 500
 	Compress       bool // Compress records with snappy
 
-	// Authentication and enpoints
-	StreamName string // Kinesis/Firehose stream name
-	Region     string // AWS region
-	Profile    string // AWS Profile name
-	Endpoint   string // AWS endpoint
+	// Firehose details
+	StreamName     string       // Kinesis/Firehose stream name
+	Region         string       // AWS region
+	Profile        string       // AWS Profile name
+	Endpoint       string       // AWS endpoint
+	FHClientGetter ClientGetter // Allow injecting a custom firehose client getter. Mostly for mock testing
 
 	OnFHError func(e error)
 }
@@ -98,7 +104,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	defer srv.Unlock()
 
 	if cfg.Compress && cfg.ConcatRecords {
-		return fmt.Errorf("%w: cannot compress and concat records", configError)
+		return fmt.Errorf("%w: cannot compress and concat records", ErrConfig)
 	}
 
 	if err = srv.fhClientReset(cfg); err != nil {
@@ -106,6 +112,14 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		return
 	}
 	srv.cfg = *cfg
+
+	if srv.cfg.FlushTimeout == 0 {
+		srv.cfg.FlushTimeout = defaultFlushTimeout
+	}
+
+	if srv.cfg.FlushCron == 0 {
+		srv.cfg.FlushCron = defaultFlushCron
+	}
 
 	if srv.cfg.MaxWorkers == 0 {
 		srv.cfg.MaxWorkers = defaultMaxWorkers
@@ -177,7 +191,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		// }
 	}
 
-	log.Printf("Firehose config: %#v", srv.cfg)
+	// log.Printf("Firehose config: %#v", srv.cfg)
 
 	select {
 	case srv.chReload <- true:

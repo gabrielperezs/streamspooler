@@ -13,11 +13,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/firehose/types"
 	"github.com/aws/smithy-go"
 	"github.com/gabrielperezs/streamspooler/v2/internal/compress"
+	"github.com/gabrielperezs/streamspooler/v2/internal/cron"
 	"github.com/gallir/bytebufferpool"
 )
 
 const (
-	recordsTimeout = 15 * time.Second
 	// TODO CHECK
 	maxRecordSize = 1000 * 1024 // The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1024 KB
 	// TODO maxBattchRecords = 500
@@ -51,6 +51,7 @@ type Client struct {
 	finish     chan bool
 	ID         int64
 	t          *time.Timer
+	cron       *cron.Cron
 	onFlyRetry int64
 }
 
@@ -65,7 +66,8 @@ func NewClient(srv *Server) *Client {
 		flushed: make(chan bool),
 		srv:     srv,
 		ID:      n,
-		t:       time.NewTimer(recordsTimeout),
+		t:       time.NewTimer(srv.cfg.FlushTimeout),
+		cron:    cron.New(srv.cfg.FlushCron),
 		batch:   make([]*bytebufferpool.ByteBuffer, 0, maxBatchRecords),
 		records: make([]types.Record, 0, maxBatchRecords),
 		buff:    pool.Get(),
@@ -164,14 +166,15 @@ func (clt *Client) listen() {
 
 		case <-clt.t.C:
 			clt.flush()
+		case <-clt.cron.C:
+			clt.flush()
 
 		case f := <-clt.finish:
-			//Stop and drain the timer channel
-			if f && !clt.t.Stop() {
-				select {
-				case <-clt.t.C:
-				default:
-				}
+			//Stop the timers
+			// drain no longer needed as of go 1.23. See Stop() docs.
+			if f {
+				clt.t.Stop()
+				clt.cron.Stop()
 			}
 
 			var err error
@@ -225,13 +228,14 @@ func (clt *Client) batchRecords() int {
 // flush build the last record if need and send the records slice to AWS Firehose
 func (clt *Client) flush() error {
 
-	if !clt.t.Stop() {
-		select {
-		case <-clt.t.C:
-		default:
-		}
-	}
-	clt.t.Reset(recordsTimeout)
+	// no longer needed after go 1.23
+	// if !clt.t.Stop() {
+	// 	select {
+	// 	case <-clt.t.C:
+	// 	default:
+	// 	}
+	// }
+	clt.t.Reset(clt.srv.cfg.FlushTimeout)
 
 	// Don't send empty batch
 	if clt.totalBatchSize() == 0 {
