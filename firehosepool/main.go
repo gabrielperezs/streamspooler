@@ -37,7 +37,7 @@ type Config struct {
 
 	// Flush timers
 	FlushTimeout time.Duration // Max time between flushes. Will force a flush after 15m
-	FlushCron    time.Duration // Hourly Cron for flushing. "59m10s" would tick hourly at 59:10. Default to "59m30s"
+	FlushCron    time.Duration // Hourly Cron for flushing. Default to 59m 30s, ticking hourly at hh:59:30.
 
 	// Limits
 	Buffer         int

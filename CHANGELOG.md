@@ -5,18 +5,25 @@
 
 ### Added
 
-- Added FlushCron option to set an hourly timer at flushes hourly at a specified minute and second. Defaults hourly at 55m30s
+- Added FlushCron option to set an hourly timer that flushes hourly at a specified minute and second. Defaults hourly at 55m30s
 - Added FlushTimeout to control the max time between flushes. Defaults to 15m. It was fixed to this default.
 - Added tests for throttling error.
+- Added FHGetter option to inject a firehose client getter. Used for testing.
 
 ### Changed
-- firehosepool.New now returns also an error, allowing failing fast at runtime if there are errorrs with the firehose client setup.
+
+- Changed major version to v2
+- firehosepool.New now returns also an error, allowing failing fast at runtime if there are errors with the firehose client setup.
+  Workers reload separated from firehose reload. Also fixes reload problem when firehose was failing.
 - Changed aws-sdk-go to v2
 - Max batch size was 3 MiB. The correct max supported is 4MiB
 - Max Record size was 1000 KB. The correct one is 1000 KiB
-- Monad copied to an internal package
+- monad package copied to this repos at streamspooler/v2/monad
+- MaxRecords now refers to the Max Batch size records. Hard aws limit is 500. 500 is the default and max
+- Added MaxConcatLines to control the max lines concatenated by '\n' in a Record. Defaults to 500. There is no limit on aws for this.
 
 ### Fixed
+
 - Total batch size calculation was wrong. It was adding the whole record size for each record line. So it did not use the 3MiB batch limit.
 - panic race condition on exit when retrying failed records. retry goroutine could send to a closed channel
 - MaxRecords was a wrong mix of max lines per record and maxrecords. It was kind of limiting both, but not reseting on each append.
