@@ -3,7 +3,6 @@ package firehosepool
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/firehose"
@@ -43,10 +42,10 @@ func (c *FHClientGetter) GetClient(cfg *Config) (*firehose.Client, error) {
 		return cli, fmt.Errorf("firehose GetClient ERROR: describe stream: %w", err)
 	}
 
-	log.Printf("Firehose Connected to %s (%s) status %s",
-		*l.DeliveryStreamDescription.DeliveryStreamName,
-		*l.DeliveryStreamDescription.DeliveryStreamARN,
-		l.DeliveryStreamDescription.DeliveryStreamStatus)
+	logger.Info("Streamspooler: Firehose Connected",
+		"stream-name", *l.DeliveryStreamDescription.DeliveryStreamName,
+		"stream-arn", *l.DeliveryStreamDescription.DeliveryStreamARN,
+		"status", l.DeliveryStreamDescription.DeliveryStreamStatus)
 
 	return cli, nil
 }

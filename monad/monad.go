@@ -1,7 +1,6 @@
 package monad
 
 import (
-	"log"
 	"sync"
 	"time"
 )
@@ -36,7 +35,6 @@ func New(cfg *Config) *Monad {
 		done:   make(chan struct{}, 1),
 		finish: make(chan struct{}, 1),
 	}
-	log.Println("MONAD: New Monad created")
 	m.Reload(cfg)
 	// Create initial workers
 	if m.desired < m.cfg.Min {
@@ -106,7 +104,7 @@ func (m *Monad) monitor() {
 					m.lastActivty = time.Now()
 				}
 			}
-			log.Printf("MONAD Queue: warm=%v, Desired %d, lastActivity: %s", l, m.desired, m.lastActivty)
+			// log.Printf("MONAD Queue: warm=%v, Desired %d, lastActivity: %s", l, m.desired, m.lastActivty)
 		}
 	}
 }

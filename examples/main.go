@@ -27,22 +27,19 @@ func RandStringRunes(n int) string {
 
 func main() {
 	c := firehosepool.Config{
-		StreamName:     "webbeds-testing-stream",
-		Profile:        "yourprofile",
+		StreamName: "webbeds-testing-stream",
+		// Profile:        "yourprofile",
 		Region:         "eu-west-1",
 		MaxConcatLines: 25,
 		Buffer:         5,
 		ConcatRecords:  true,
-		// TODO check final values. added this
-		MinWorkers: 1,
-		MaxWorkers: 5,
+		MinWorkers:     1,
+		MaxWorkers:     5,
 	}
 	p, err := firehosepool.New(c)
 	if err != nil {
 		log.Fatalf("Error starting firehose: %s\n", err)
 	}
-	// TODO remove this sleep
-	time.Sleep(2 * time.Second)
 
 	go func() {
 
@@ -64,8 +61,7 @@ func main() {
 				return
 			}
 
-			// TODO it was 400ms
-			<-time.After(1 * time.Microsecond)
+			<-time.After(500 * time.Millisecond)
 		}
 	}()
 

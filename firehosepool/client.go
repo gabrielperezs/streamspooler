@@ -3,7 +3,8 @@ package firehosepool
 import (
 	"context"
 	"errors"
-	"log"
+	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,11 +19,9 @@ import (
 )
 
 const (
-	// TODO CHECK
-	maxRecordSize = 1000 * 1024 // The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1024 KB
-	// TODO maxBattchRecords = 500
-	maxBatchRecords = 500     // The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
-	maxBatchSize    = 4 << 20 // 4 MiB per call
+	maxRecordSize   = 1000 * 1024 // The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1024 KB
+	maxBatchRecords = 500         // The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
+	maxBatchSize    = 4 << 20     // 4 MiB per call
 
 	partialFailureWait = 200 * time.Millisecond
 	globalFailureWait  = 500 * time.Millisecond
@@ -58,7 +57,6 @@ type Client struct {
 // NewClient creates a new client that connects to a Firehose
 func NewClient(srv *Server) *Client {
 	n := atomic.AddInt64(&clientCount, 1)
-	log.Printf("Firehose client %s [%d]: starting", srv.cfg.StreamName, n)
 
 	clt := &Client{
 		done:    make(chan bool),
@@ -79,8 +77,15 @@ func NewClient(srv *Server) *Client {
 	return clt
 }
 
+func (clt *Client) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.Int64("ID", clt.ID),
+		slog.String("Stream", clt.srv.cfg.StreamName),
+	)
+}
+
 func (clt *Client) listen() {
-	log.Printf("Firehose client %s [%d]: ready", clt.srv.cfg.StreamName, clt.ID)
+	logger.Info("Streamspooler: worker ready", "worker", clt)
 	for {
 		select {
 		case ri := <-clt.srv.C:
@@ -89,7 +94,7 @@ func (clt *Client) listen() {
 			if clt.srv.cfg.Serializer != nil {
 				var err error
 				if r, err = clt.srv.cfg.Serializer(ri); err != nil {
-					log.Printf("Firehose client %s [%d]: ERROR serializer: %s", clt.srv.cfg.StreamName, clt.ID, err)
+					logger.Error("serializer error", "err", err, "worker", clt)
 					continue
 				}
 			} else {
@@ -110,21 +115,14 @@ func (clt *Client) listen() {
 			}
 
 			if recordSize > maxRecordSize {
-				log.Printf("Firehose client %s [%d]: ERROR: one record is over the limit %d/%d", clt.srv.cfg.StreamName, clt.ID, recordSize, maxRecordSize)
+				logger.Error("firehose ERROR: one record is over the limitd", "worker", clt, "recordSize", recordSize, "maxRecordSize", maxRecordSize)
 				continue
 			}
 
 			clt.lines++
 
 			// The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
-			// if clt.count >= clt.srv.cfg.MaxRecords || len(clt.batch) >= maxBatchRecords || clt.batchSize+recordSize+1 >= maxBatchSize {
-			// TODO CHECK
 			if len(clt.batch) >= clt.srv.cfg.MaxRecords || clt.exceedsMaxBatchSize(recordSize) {
-				// log.Printf("#%d flushing maxBatchSize/MaxBatchRecords: lines %d/%d | batch %d/%d | size [%d B] %d/%d kiB",
-				// 	clt.ID,
-				// 	clt.lines, clt.srv.cfg.MaxConcatLines,
-				// 	len(clt.batch), clt.srv.cfg.MaxRecords,
-				// 	recordSize, clt.totalBatchSize()/1024, maxBatchSize/1024)
 				// Force flush
 				clt.flush()
 			}
@@ -132,37 +130,29 @@ func (clt *Client) listen() {
 			// The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1000 KB.
 			if !clt.srv.cfg.ConcatRecords || clt.buff.Len()+recordSize+1 >= maxRecordSize || clt.lines >= clt.srv.cfg.MaxConcatLines {
 				if clt.buff.Len() > 0 {
-					// Save in new record
-					// TODO debug print
-					// log.Printf("#%d Appending record %d/%d  size %d/%d kiB, line count %d/%d batchsize %d/%d kiB",
-					// 	clt.ID,
-					// 	len(clt.batch), clt.srv.cfg.MaxRecords,
-					// 	clt.buff.Len()/1024, maxRecordSize/1024,
-					// 	clt.lines, clt.srv.cfg.MaxConcatLines,
-					// 	clt.totalBatchSize()/1024, maxBatchSize/1024,
-					// )
+					// Create new record on batch
 					clt.batchSize += clt.buff.Len()
+					logger.Debug("streamspooler appending record to batch",
+						"worker", clt,
+						"record-size", fmt.Sprintf("%d/%d B", clt.buff.Len(), maxRecordSize),
+						"record-lines", fmt.Sprintf("%d/%d", clt.lines, clt.srv.cfg.MaxConcatLines),
+						"batch-records", fmt.Sprintf("%d/%d", len(clt.batch)+1, clt.srv.cfg.MaxRecords),
+						"batch-size", fmt.Sprintf("%d/%d B", clt.totalBatchSize(), maxBatchSize))
 					clt.buff = pool.Get()
 					clt.batch = append(clt.batch, clt.buff)
-					clt.lines = 0 // TODO CHECK the meaning of this count. Now is lines count
+					clt.lines = 0
 				}
 			}
 
 			clt.buff.Write(r)
 			clt.buff.Write(newLine)
 
-			// log.Printf("ID %d Wrote record to buff - batch record num #%d/%d, line count %d/%d recordsize %d/%dkiB batchsize %d/%d kiB err %d\n",
-			// 	clt.ID,
-			// 	len(clt.batch), maxBatchRecords,
-			// 	clt.count, clt.srv.cfg.MaxRecords,
-			// 	clt.buff.Len()/1024, maxRecordSize/1024,
-			// 	clt.totalBatchSize()/1024, maxBatchSize/1024,
-			// 	clt.srv.errors)
-
-			// if len(clt.batch)+1 >= maxBatchRecords || clt.batchSize >= maxBatchSize {
-			// 	log.Println("Flushing matxbatChrecords/maxBatchSize")
-			// 	clt.flush()
-			// }
+			// logger.Debug("streamspooler wrote to buf", "worker", clt,
+			// 	"entry size", recordSize,
+			// 	"line count", fmt.Sprintf("%d/%d", clt.lines, clt.srv.cfg.MaxConcatLines),
+			// 	"record count", fmt.Sprintf("%d/%d", len(clt.batch), clt.srv.cfg.MaxRecords),
+			// 	"record size", fmt.Sprintf("%d/%d KiB", clt.buff.Len(), maxRecordSize),
+			// 	"batch size", fmt.Sprintf("%d/%d kiB", clt.totalBatchSize(), maxBatchSize))
 
 		case <-clt.t.C:
 			clt.flush()
@@ -181,25 +171,24 @@ func (clt *Client) listen() {
 			err = clt.flush()
 
 			if err != nil {
-				log.Printf("Error flushing on finish: %s", err)
+				logger.Error("streamspooler error flushing", "err", err, "worker", clt)
 			}
 
 			if f {
 				// Have to finish
 				if l := clt.batchRecords(); l > 0 {
-					log.Printf("Firehose client %s [%d]: Exit, %d records lost", clt.srv.cfg.StreamName, clt.ID, l)
+					logger.Info("Streamspooler worker exit", "worker", clt, "records-lost", l)
 					clt.done <- false // WARN: To avoid blocking the processs
 					return
 				}
-
-				log.Printf("Firehose client %s [%d]: Exit", clt.srv.cfg.StreamName, clt.ID)
+				logger.Info("Streamspooler worker exit", "worker", clt)
 				clt.done <- true
 				return
 			}
 
 			// Only a flush
 			if l := len(clt.batch); l > 0 || err != nil {
-				log.Printf("Firehose client %s [%d]: Flush, %d records pending", clt.srv.cfg.StreamName, clt.ID, l)
+				logger.Error("Streamspooler worker flush error", "worker", clt, "records-pending", l, "err", err)
 				clt.flushed <- false // WARN: To avoid blocking the processs
 			} else {
 				clt.flushed <- true
@@ -228,13 +217,7 @@ func (clt *Client) batchRecords() int {
 // flush build the last record if need and send the records slice to AWS Firehose
 func (clt *Client) flush() error {
 
-	// no longer needed after go 1.23
-	// if !clt.t.Stop() {
-	// 	select {
-	// 	case <-clt.t.C:
-	// 	default:
-	// 	}
-	// }
+	// no longer needed Stop and drain after go 1.23
 	clt.t.Reset(clt.srv.cfg.FlushTimeout)
 
 	// Don't send empty batch
@@ -243,7 +226,6 @@ func (clt *Client) flush() error {
 	}
 
 	if clt.srv.awsSvc == nil {
-		log.Println("flush error: firehose client not ready")
 		clt.srv.failure()
 		return errors.New("flush error: firehose client not ready")
 	}
@@ -263,12 +245,11 @@ func (clt *Client) flush() error {
 		DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
 		Records:            clt.records,
 	})
-	log.Printf("Firehose client %s [%d]: DEBUG: flushed: lines %d/%d | batch %d/%d | size %d/%d B (err %v)\n",
-		clt.srv.cfg.StreamName, clt.ID,
-		clt.lines, clt.srv.cfg.MaxConcatLines,
-		len(clt.records), clt.srv.cfg.MaxRecords,
-		clt.totalBatchSize(), maxBatchSize,
-		err)
+	logger.Debug("Streamspooler worker flushed",
+		"worker", clt,
+		"batch-records", fmt.Sprintf("%d/%d", len(clt.batch)+1, clt.srv.cfg.MaxRecords),
+		"batch-size", fmt.Sprintf("%d/%d B", clt.totalBatchSize(), maxBatchSize),
+		"err", err)
 
 	if err != nil {
 		if clt.srv.cfg.OnFHError != nil {
@@ -276,9 +257,9 @@ func (clt *Client) flush() error {
 		}
 		var ae smithy.APIError
 		if errors.As(err, &ae) && ae.ErrorCode() == "ThrottlingException" {
-			log.Printf("Firehose client %s [%d]: ERROR ThrottlingException: %s", clt.srv.cfg.StreamName, clt.ID, err)
+			logger.Error("streamspooler flush: firehose  Throttling error", "err", err, "worker", clt)
 		} else {
-			log.Printf("Firehose client %s [%d]: ERROR PutRecordBatch: %s", clt.srv.cfg.StreamName, clt.ID, err)
+			logger.Error("streamspooler flush: firehose PutRecordBatch error", "err", err, "worker", clt)
 		}
 		clt.srv.failure()
 
@@ -289,17 +270,15 @@ func (clt *Client) flush() error {
 		for i := range clt.batch {
 			// The limit of retry elements will be applied just to non-critical messages
 			if !clt.srv.cfg.Critical && atomic.LoadInt64(&clt.onFlyRetry) > onFlyRetryLimit {
-				log.Printf("Firehose client %s [%d]: ERROR maximum of batch records retrying (%d): %s",
-					clt.srv.cfg.StreamName, clt.ID, onFlyRetryLimit, err)
+				logger.Error("Streamspooler worker flush: max batch records retrying limit error", "worker", clt, "onFlyRetryLimit", onFlyRetryLimit)
 				continue
 			}
 
 			// Sending back to channel, it will run a goroutine
-			log.Println("sending back to channel")
 			clt.retry(clt.batch[i].B)
 		}
 	} else if *output.FailedPutCount > 0 {
-		log.Printf("Firehose client %s [%d]: partial failed, %d sent back to the buffer", clt.srv.cfg.StreamName, clt.ID, *output.FailedPutCount)
+		logger.Info("Streamspooler worker flush: firehose partial failure, records sent back to the buffer", "worker", clt, "failed-put-count", *output.FailedPutCount)
 		// Sleep few millisecond because the partial failure
 		time.Sleep(partialFailureWait)
 
@@ -314,13 +293,12 @@ func (clt *Client) flush() error {
 
 			// The limit of retry elements will be applied just to non-critical messages
 			if !clt.srv.cfg.Critical && atomic.LoadInt64(&clt.onFlyRetry) > onFlyRetryLimit {
-				log.Printf("Firehose client %s [%d]: ERROR maximum of batch records retrying %d, %s %s",
-					clt.srv.cfg.StreamName, clt.ID, onFlyRetryLimit, *r.ErrorCode, *r.ErrorMessage)
+				logger.Error("Streamspooler worker flush: max batch records retrying limit error", "worker", clt, "onFlyRetryLimit", onFlyRetryLimit)
 				continue
 			}
 
 			if *r.ErrorCode == firehoseError {
-				log.Printf("Firehose client %s [%d]: ERROR in AWS: %s - %s", clt.srv.cfg.StreamName, clt.ID, *r.ErrorCode, *r.ErrorMessage)
+				logger.Error("Streamspooler AWS Firehose error", "worker", clt, "error-code", *r.ErrorCode, "error-msg", *r.ErrorMessage)
 			}
 
 			// Sending back to channel, it will run a goroutine
@@ -375,14 +353,14 @@ func (clt *Client) retry(orig []byte) {
 			exit = clt.srv.exiting
 			clt.srv.Unlock()
 			if sent {
-				log.Printf("Firehose client %s [%d]: retry: record sent", clt.srv.cfg.StreamName, clt.ID)
+				logger.Debug("Streamspooler worker retry: record sent", "worker", clt)
 				return
 			}
 			if exit {
-				log.Printf("Firehose client %s [%d]: retry: client exiting, discarding", clt.srv.cfg.StreamName, clt.ID)
+				logger.Info("Streamspooler worker retry: worker exiting, discarding", "worker", clt)
 				return
 			}
-			log.Printf("Firehose client %s [%d]: retry: channel full, waiting", clt.srv.cfg.StreamName, clt.ID)
+			logger.Debug("Streamspooler worker retry: channel full, waiting", "worker", clt)
 			<-time.After(1 * time.Second)
 		}
 	}(b)

@@ -3,7 +3,7 @@ package firehosepool
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -53,7 +53,12 @@ type Config struct {
 	Endpoint       string       // AWS endpoint
 	FHClientGetter ClientGetter // Allow injecting a custom firehose client getter. Mostly for mock testing
 
+	// Callbacks
 	OnFHError func(e error)
+
+	// Logging
+	Logger   Logger       // custom logger satisfying firehosepool.Logger interface. nil uses default slog logger
+	LogLevel slog.Leveler //   -4=Debug , 0=Info, 8=Error
 }
 
 type Server struct {
@@ -103,12 +108,14 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	srv.Lock()
 	defer srv.Unlock()
 
+	SetLogger(cfg.Logger, cfg.LogLevel)
+
 	if cfg.Compress && cfg.ConcatRecords {
 		return fmt.Errorf("%w: cannot compress and concat records", ErrConfig)
 	}
 
 	if err = srv.fhClientReset(cfg); err != nil {
-		log.Printf("Reload aborted due to firehose client error: %s", err)
+		logger.Error("Streamspooler: reload aborted due to firehose client error", "stream", srv.cfg.StreamName, "error", err)
 		return
 	}
 	srv.cfg = *cfg
@@ -166,7 +173,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 				}
 
 				currPtc := (l / float64(cap(srv.C))) * 100
-				log.Printf("Firehose WarmFn: %d/%d (%.2f%%)", len(srv.C), cap(srv.C), currPtc)
+				logger.Info("Streamspooler: warm up", "stream", srv.cfg.StreamName, "in-queue", fmt.Sprintf("%d/%d", len(srv.C), cap(srv.C)), "currPct", currPtc)
 
 				return currPtc > srv.cfg.ThresholdWarmUp*100
 			},
@@ -186,12 +193,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		}
 	} else {
 		srv.cliDesired = srv.cfg.MaxWorkers
-		// for len(srv.clients) < srv.cliDesired {
-		// 	srv.clients = append(srv.clients, NewClient(srv))
-		// }
 	}
-
-	// log.Printf("Firehose config: %#v", srv.cfg)
 
 	select {
 	case srv.chReload <- true:
@@ -242,7 +244,7 @@ func (srv *Server) Exit() {
 	}
 
 	if len(srv.C) > 0 {
-		log.Printf("Firehose: messages lost %d", len(srv.C))
+		logger.Info("Streamspooler: exiting", "messages lost", len(srv.C))
 	}
 
 	close(srv.C)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,6 +48,7 @@ func TestTrottlingError(t *testing.T) {
 		MaxWorkers:     1,
 		Buffer:         1,
 		FHClientGetter: &mockedClient{},
+		LogLevel:       slog.LevelDebug,
 	}
 	p, err := New(c)
 	if err != nil {
@@ -95,70 +97,6 @@ func TestTrottlingError(t *testing.T) {
 	fmt.Printf("Firehose srv forced errors count: %d\n", p.errors)
 }
 
-// func TestPutRecordBatchThrottling(t *testing.T) {
-
-// 	c := Config{
-// 		StreamName: "firehoseStreamName",
-// 		Region:     "eu-west-1",
-// 		// MaxRecords:     4,
-// 		MinWorkers:     1,
-// 		MaxWorkers:     1,
-// 		FHClientGetter: &mockedClient{},
-// 	}
-// 	p, err := New(c)
-// 	if err != nil {
-// 		t.Fatalf("Firehose: %s\n", err)
-// 	}
-
-// 	go func() {
-// 		for i := 0; i < 10; i++ {
-// 			r, err := ffjson.Marshal(&record{
-// 				TS: int64(time.Now().UnixNano() / int64(time.Millisecond)),
-// 				S:  fmt.Sprintf("%s: %s", "testing bytes: Testing", RandStringRunes(10)),
-// 			})
-
-// 			if err != nil {
-// 				log.Panicf("E: %s", err)
-// 			}
-
-// 			select {
-// 			case p.C <- r:
-// 				fmt.Println("sent ", i)
-// 			default:
-// 				log.Printf("Channel closed or full")
-// 			}
-// 		}
-// 	}()
-
-// 	go func() {
-// 		<-time.After(1 * time.Second)
-// 		p.Flush()
-// 	}()
-
-// 	go func() {
-// 		<-time.After(2 * time.Second)
-// 		p.Exit()
-// 	}()
-
-// 	p.Waiting()
-
-// 	if numReq.Load() == 0 {
-// 		t.Fatalf("Firehose: no AWS Requests made\n")
-// 	}
-
-// 	if p.errors == 0 {
-// 		// should do some errors and retries, due to forced throttling error
-// 		t.Fatalf("Firehose: errors %d\n", p.errors)
-// 	}
-
-// 	if p.errors < numReq.Load()-1 {
-// 		t.Fatalf("Firehose: errors %d < requests -1  (%d)\n", p.errors, numReq.Load()-1)
-// 	}
-// 	fmt.Printf("Firehose mocked requests received: %d\n", numReq.Load())
-// 	fmt.Printf("Firehose srv forced errors count: %d\n", p.errors)
-// 	fmt.Printf("Firehose messages lost (normal due to exit): %d\n", len(p.C))
-// }
-
 type mockedClient struct{}
 
 func (m *mockedClient) GetClient(cfg *Config) (*firehose.Client, error) {
@@ -166,7 +104,7 @@ func (m *mockedClient) GetClient(cfg *Config) (*firehose.Client, error) {
 		out middleware.FinalizeOutput, metadata middleware.Metadata, err error,
 	) {
 		numReq.Add(1)
-		fmt.Println("MOCK firehose request")
+		log.Println("test mocked firehose request received")
 		// Simulate Throttling error
 		return middleware.FinalizeOutput{}, middleware.Metadata{}, &smithy.GenericAPIError{
 			Code:    "ThrottlingException",

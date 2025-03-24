@@ -21,6 +21,7 @@
 - monad package copied to this repos at streamspooler/v2/monad
 - MaxRecords now refers to the Max Batch size records. Hard aws limit is 500. 500 is the default and max
 - Added MaxConcatLines to control the max lines concatenated by '\n' in a Record. Defaults to 500. There is no limit on aws for this.
+- Log changed to slog by default. A logger can be injected with Logger config, but still it will not receive debug messages if DebugLevel < 0
 
 ### Fixed
 
