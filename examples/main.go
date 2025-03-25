@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"math/rand"
 	"time"
 
@@ -26,8 +27,12 @@ func RandStringRunes(n int) string {
 }
 
 func main() {
+	// logger := slog.New(slog.NewTextHandler(os.Stderr,
+	// 	&slog.HandlerOptions{Level: slog.LevelDebug}))
+	// slog.SetDefault(logger)
+
 	c := firehosepool.Config{
-		StreamName: "webbeds-testing-stream",
+		StreamName: "testing-stream",
 		// Profile:        "yourprofile",
 		Region:         "eu-west-1",
 		MaxConcatLines: 25,
@@ -35,6 +40,8 @@ func main() {
 		ConcatRecords:  true,
 		MinWorkers:     1,
 		MaxWorkers:     5,
+		LogBatchAppend: true,
+		LogRecordWrite: true,
 	}
 	p, err := firehosepool.New(c)
 	if err != nil {
@@ -55,9 +62,9 @@ func main() {
 
 			select {
 			case p.C <- r:
-				fmt.Printf("Record sent\n")
+				slog.Info("Record sent")
 			default:
-				log.Printf("Channel full")
+				slog.Error("Channel full")
 				return
 			}
 

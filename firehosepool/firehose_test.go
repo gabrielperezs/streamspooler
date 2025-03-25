@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,10 +20,6 @@ import (
 type record struct {
 	TS int64  `json:"ts,omitempty"`
 	S  string `json:"s,omitempty"`
-}
-
-func init() {
-	rand.Seed(uint64(time.Now().UnixNano()))
 }
 
 var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -48,7 +43,8 @@ func TestTrottlingError(t *testing.T) {
 		MaxWorkers:     1,
 		Buffer:         1,
 		FHClientGetter: &mockedClient{},
-		LogLevel:       slog.LevelDebug,
+		LogBatchAppend: true,
+		LogRecordWrite: true,
 	}
 	p, err := New(c)
 	if err != nil {

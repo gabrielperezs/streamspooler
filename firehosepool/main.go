@@ -56,9 +56,9 @@ type Config struct {
 	// Callbacks
 	OnFHError func(e error)
 
-	// Logging
-	Logger   Logger       // custom logger satisfying firehosepool.Logger interface. nil uses default slog logger
-	LogLevel slog.Leveler //   -4=Debug , 0=Info, 8=Error
+	// Logging for detailed debugging. Enabling it can be too verbose
+	LogBatchAppend bool // Log each batch record append with detailed sizes and counts for buffer and batch
+	LogRecordWrite bool // Log each record buffer write with detailed sizes an counts.
 }
 
 type Server struct {
@@ -108,14 +108,14 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	srv.Lock()
 	defer srv.Unlock()
 
-	SetLogger(cfg.Logger, cfg.LogLevel)
+	// SetLogger(cfg.Logger, cfg.LogLevel)
 
 	if cfg.Compress && cfg.ConcatRecords {
 		return fmt.Errorf("%w: cannot compress and concat records", ErrConfig)
 	}
 
 	if err = srv.fhClientReset(cfg); err != nil {
-		logger.Error("Streamspooler: reload aborted due to firehose client error", "stream", srv.cfg.StreamName, "error", err)
+		slog.Error("Streamspooler: reload aborted due to firehose client error", "stream", srv.cfg.StreamName, "error", err)
 		return
 	}
 	srv.cfg = *cfg
@@ -173,7 +173,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 				}
 
 				currPtc := (l / float64(cap(srv.C))) * 100
-				logger.Info("Streamspooler: warm up", "stream", srv.cfg.StreamName, "in-queue", fmt.Sprintf("%d/%d", len(srv.C), cap(srv.C)), "currPct", currPtc)
+				slog.Info("Streamspooler: warm up", "stream", srv.cfg.StreamName, "in-queue", fmt.Sprintf("%d/%d", len(srv.C), cap(srv.C)), "currPct", currPtc)
 
 				return currPtc > srv.cfg.ThresholdWarmUp*100
 			},
@@ -244,7 +244,7 @@ func (srv *Server) Exit() {
 	}
 
 	if len(srv.C) > 0 {
-		logger.Info("Streamspooler: exiting", "messages lost", len(srv.C))
+		slog.Info("Streamspooler: exiting", "messages lost", len(srv.C))
 	}
 
 	close(srv.C)

@@ -2,6 +2,7 @@ package firehosepool
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -36,7 +37,7 @@ func (srv *Server) failure() {
 	srv.lastError = time.Now()
 	srv.Unlock()
 
-	logger.Info("Streamspooler failure marked", "stream", srv.cfg.StreamName, "errors", srv.errors, "reload", reload)
+	slog.Info("Streamspooler failure marked", "stream", srv.cfg.StreamName, "errors", srv.errors, "reload", reload)
 
 	if reload {
 		select {
@@ -48,7 +49,7 @@ func (srv *Server) failure() {
 
 func (srv *Server) fhClientReset(cfg *Config) (err error) {
 	if srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
-		logger.Info("Streamspooler: creating new aws firehose client", "stream", srv.cfg.StreamName)
+		slog.Info("Streamspooler: creating new aws firehose client", "stream", srv.cfg.StreamName)
 
 		var fhcg ClientGetter
 		if cfg.FHClientGetter != nil {
@@ -74,7 +75,7 @@ func (srv *Server) clientsReset() {
 	defer srv.Unlock()
 
 	defer func() {
-		logger.Info("Streamspooler: workers reset done", "stream", srv.cfg.StreamName, "workers", len(srv.clients), "in-queue", fmt.Sprintf("%d/%d", len(srv.C), cap(srv.C)))
+		slog.Info("Streamspooler: workers reset done", "stream", srv.cfg.StreamName, "workers", len(srv.clients), "in-queue", fmt.Sprintf("%d/%d", len(srv.C), cap(srv.C)))
 	}()
 
 	currClients := len(srv.clients)
