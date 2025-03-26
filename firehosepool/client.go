@@ -85,7 +85,7 @@ func (clt *Client) LogValue() slog.Value {
 }
 
 func (clt *Client) listen() {
-	slog.Info("Streamspooler: worker ready", "worker", clt)
+	slog.Info("Firehosepool: worker ready", "worker", clt)
 	for {
 		select {
 		case ri := <-clt.srv.C:
@@ -122,8 +122,12 @@ func (clt *Client) listen() {
 			clt.lines++
 
 			// The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
-			if len(clt.batch) >= clt.srv.cfg.MaxRecords || clt.exceedsMaxBatchSize(recordSize) {
-				// Force flush
+			// force flush if any limit reached
+			if len(clt.batch) >= clt.srv.cfg.MaxRecords {
+				metricFlushesMaxRecords.WithLabelValues(clt.srv.cfg.MetricName).Inc()
+				clt.flush()
+			} else if clt.exceedsMaxBatchSize(recordSize) {
+				metricFlushesMaxSize.WithLabelValues(clt.srv.cfg.MetricName).Inc()
 				clt.flush()
 			}
 
@@ -133,7 +137,7 @@ func (clt *Client) listen() {
 					// Create new record on batch
 					clt.batchSize += clt.buff.Len()
 					if clt.srv.cfg.LogBatchAppend {
-						slog.Info("streamspooler appending record to batch",
+						slog.Info("Firehosepool: appending record to batch",
 							"worker", clt,
 							"record-size", fmt.Sprintf("%d/%dB", clt.buff.Len(), maxRecordSize),
 							"record-lines", fmt.Sprintf("%d/%d", clt.lines, clt.srv.cfg.MaxConcatLines),
@@ -150,7 +154,7 @@ func (clt *Client) listen() {
 			clt.buff.Write(newLine)
 
 			if clt.srv.cfg.LogRecordWrite {
-				slog.Info("streamspooler wrote to buf", "worker", clt,
+				slog.Info("Firehosepool wrote to buf", "worker", clt,
 					"entry size", recordSize,
 					"line count", fmt.Sprintf("%d/%d", clt.lines, clt.srv.cfg.MaxConcatLines),
 					"record count", fmt.Sprintf("%d/%d", len(clt.batch), clt.srv.cfg.MaxRecords),
@@ -159,8 +163,10 @@ func (clt *Client) listen() {
 			}
 
 		case <-clt.t.C:
+			metricFlushesTime.WithLabelValues(clt.srv.cfg.MetricName).Inc()
 			clt.flush()
 		case <-clt.cron.C:
+			metricFlushesTime.WithLabelValues(clt.srv.cfg.MetricName).Inc()
 			clt.flush()
 
 		case f := <-clt.finish:
@@ -175,24 +181,24 @@ func (clt *Client) listen() {
 			err = clt.flush()
 
 			if err != nil {
-				slog.Error("streamspooler error flushing", "err", err, "worker", clt)
+				slog.Error("Firehosepool error flushing", "err", err, "worker", clt)
 			}
 
 			if f {
 				// Have to finish
 				if l := clt.batchRecords(); l > 0 {
-					slog.Info("Streamspooler worker exit", "worker", clt, "records-lost", l)
+					slog.Info("Firehosepool worker exit", "worker", clt, "records-lost", l)
 					clt.done <- false // WARN: To avoid blocking the processs
 					return
 				}
-				slog.Info("Streamspooler worker exit", "worker", clt)
+				slog.Info("Firehosepool worker exit", "worker", clt)
 				clt.done <- true
 				return
 			}
 
 			// Only a flush
 			if l := len(clt.batch); l > 0 || err != nil {
-				slog.Error("Streamspooler worker flush error", "worker", clt, "records-pending", l, "err", err)
+				slog.Error("Firehosepool worker flush error", "worker", clt, "records-pending", l, "err", err)
 				clt.flushed <- false // WARN: To avoid blocking the processs
 			} else {
 				clt.flushed <- true
@@ -249,11 +255,17 @@ func (clt *Client) flush() error {
 		DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
 		Records:            clt.records,
 	})
-	slog.Debug("Streamspooler worker flushed",
-		"worker", clt,
-		"batch-records", fmt.Sprintf("%d/%d", len(clt.batch)+1, clt.srv.cfg.MaxRecords),
-		"batch-size", fmt.Sprintf("%d/%d B", clt.totalBatchSize(), maxBatchSize),
-		"err", err)
+	if clt.srv.cfg.LogFlushes {
+		slog.Info("Firehosepool worker flushed",
+			"worker", clt,
+			"batch-records", fmt.Sprintf("%d/%d", len(clt.batch), clt.srv.cfg.MaxRecords),
+			"batch-size", fmt.Sprintf("%d/%dB", clt.totalBatchSize(), maxBatchSize),
+			"err", err)
+	}
+	if err == nil {
+		metricBatchRecords.WithLabelValues(clt.srv.cfg.MetricName).Observe(float64(len(clt.batch)))
+		metricBatchSizeKiB.WithLabelValues(clt.srv.cfg.MetricName).Observe(float64(clt.totalBatchSize()) / 1024)
+	}
 
 	if err != nil {
 		if clt.srv.cfg.OnFHError != nil {
@@ -261,9 +273,11 @@ func (clt *Client) flush() error {
 		}
 		var ae smithy.APIError
 		if errors.As(err, &ae) && ae.ErrorCode() == "ThrottlingException" {
-			slog.Error("streamspooler flush: firehose  Throttling error", "err", err, "worker", clt)
+			slog.Error("Firehosepool flush: firehose  Throttling error", "err", err, "worker", clt)
+			metricFlushThrottled.WithLabelValues(clt.srv.cfg.MetricName).Inc()
 		} else {
-			slog.Error("streamspooler flush: firehose PutRecordBatch error", "err", err, "worker", clt)
+			slog.Error("Firehosepool flush: firehose PutRecordBatch error", "err", err, "worker", clt)
+			metricFlushErrors.WithLabelValues(clt.srv.cfg.MetricName).Inc()
 		}
 		clt.srv.failure()
 
@@ -274,7 +288,7 @@ func (clt *Client) flush() error {
 		for i := range clt.batch {
 			// The limit of retry elements will be applied just to non-critical messages
 			if !clt.srv.cfg.Critical && atomic.LoadInt64(&clt.onFlyRetry) > onFlyRetryLimit {
-				slog.Error("Streamspooler worker flush: max batch records retrying limit error", "worker", clt, "onFlyRetryLimit", onFlyRetryLimit)
+				slog.Error("Firehosepool worker flush: max batch records retrying limit error", "worker", clt, "onFlyRetryLimit", onFlyRetryLimit)
 				continue
 			}
 
@@ -282,7 +296,8 @@ func (clt *Client) flush() error {
 			clt.retry(clt.batch[i].B)
 		}
 	} else if *output.FailedPutCount > 0 {
-		slog.Info("Streamspooler worker flush: firehose partial failure, records sent back to the buffer", "worker", clt, "failed-put-count", *output.FailedPutCount)
+		slog.Info("Firehosepool worker flush: firehose partial failure, records sent back to the buffer", "worker", clt, "failed-put-count", *output.FailedPutCount)
+		metricFlushPartialFailed.WithLabelValues(clt.srv.cfg.MetricName).Add(float64(*output.FailedPutCount))
 		// Sleep few millisecond because the partial failure
 		time.Sleep(partialFailureWait)
 
@@ -297,12 +312,12 @@ func (clt *Client) flush() error {
 
 			// The limit of retry elements will be applied just to non-critical messages
 			if !clt.srv.cfg.Critical && atomic.LoadInt64(&clt.onFlyRetry) > onFlyRetryLimit {
-				slog.Error("Streamspooler worker flush: max batch records retrying limit error", "worker", clt, "onFlyRetryLimit", onFlyRetryLimit)
+				slog.Error("Firehosepool worker flush: max batch records retrying limit error", "worker", clt, "onFlyRetryLimit", onFlyRetryLimit)
 				continue
 			}
 
 			if *r.ErrorCode == firehoseError {
-				slog.Error("Streamspooler AWS Firehose error", "worker", clt, "error-code", *r.ErrorCode, "error-msg", *r.ErrorMessage)
+				slog.Error("Firehosepool AWS Firehose error", "worker", clt, "error-code", *r.ErrorCode, "error-msg", *r.ErrorMessage)
 			}
 
 			// Sending back to channel, it will run a goroutine
@@ -335,6 +350,7 @@ func (clt *Client) retry(orig []byte) {
 	if len(orig) == 0 {
 		return
 	}
+	metricRecordRetry.WithLabelValues(clt.srv.cfg.MetricName).Inc()
 
 	// Remove the last byte, is a newLine
 	b := make([]byte, len(orig)-len(newLine))
@@ -357,14 +373,14 @@ func (clt *Client) retry(orig []byte) {
 			exit = clt.srv.exiting
 			clt.srv.Unlock()
 			if sent {
-				slog.Debug("Streamspooler worker retry: record sent", "worker", clt)
+				slog.Debug("Firehosepool worker retry: record sent", "worker", clt)
 				return
 			}
 			if exit {
-				slog.Info("Streamspooler worker retry: worker exiting, discarding", "worker", clt)
+				slog.Info("Firehosepool worker retry: worker exiting, discarding", "worker", clt)
 				return
 			}
-			slog.Debug("Streamspooler worker retry: channel full, waiting", "worker", clt)
+			slog.Debug("Firehosepool worker retry: channel full, waiting", "worker", clt)
 			<-time.After(1 * time.Second)
 		}
 	}(b)

@@ -43,7 +43,7 @@ func (c *FHClientGetter) GetClient(cfg *Config) (*firehose.Client, error) {
 		return cli, fmt.Errorf("firehose GetClient ERROR: describe stream: %w", err)
 	}
 
-	slog.Info("Streamspooler: Firehose Connected",
+	slog.Info("Firehosepool: Firehose Connected",
 		"stream-name", *l.DeliveryStreamDescription.DeliveryStreamName,
 		"stream-arn", *l.DeliveryStreamDescription.DeliveryStreamARN,
 		"status", l.DeliveryStreamDescription.DeliveryStreamStatus)

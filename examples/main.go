@@ -5,10 +5,14 @@ import (
 	"log"
 	"log/slog"
 	"math/rand"
+	"net/http"
 	"time"
 
 	"github.com/gabrielperezs/streamspooler/v2/firehosepool"
 	"github.com/pquerna/ffjson/ffjson"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type record struct {
@@ -42,11 +46,14 @@ func main() {
 		MaxWorkers:     5,
 		LogBatchAppend: true,
 		LogRecordWrite: true,
+		EnableMetrics:  true,
 	}
 	p, err := firehosepool.New(c)
 	if err != nil {
 		log.Fatalf("Error starting firehose: %s\n", err)
 	}
+
+	go serveMetrics()
 
 	go func() {
 
@@ -78,4 +85,11 @@ func main() {
 	}()
 
 	p.Waiting()
+}
+
+func serveMetrics() {
+	prometheus.Unregister(collectors.NewGoCollector())
+	prometheus.Unregister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	http.Handle("/metrics", promhttp.Handler())
+	slog.Error("metrics and debug server", "error", http.ListenAndServe(":6060", nil))
 }

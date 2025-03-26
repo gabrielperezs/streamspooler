@@ -56,9 +56,14 @@ type Config struct {
 	// Callbacks
 	OnFHError func(e error)
 
+	// Prometheus metrics
+	EnableMetrics bool
+	MetricName    string // Name for the prometheus metrics. Default to the StreamName
+
 	// Logging for detailed debugging. Enabling it can be too verbose
 	LogBatchAppend bool // Log each batch record append with detailed sizes and counts for buffer and batch
 	LogRecordWrite bool // Log each record buffer write with detailed sizes an counts.
+	LogFlushes     bool // Log each flush with detailed sizes and counts
 }
 
 type Server struct {
@@ -115,10 +120,21 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	}
 
 	if err = srv.fhClientReset(cfg); err != nil {
-		slog.Error("Streamspooler: reload aborted due to firehose client error", "stream", srv.cfg.StreamName, "error", err)
+		slog.Error("Firehosepool: reload aborted due to firehose client error", "stream", srv.cfg.StreamName, "error", err)
 		return
 	}
+
+	if cfg.EnableMetrics && !srv.cfg.EnableMetrics {
+		registerMetrics()
+	} else if !cfg.EnableMetrics && srv.cfg.EnableMetrics {
+		unRegisterMetrics()
+	}
+
 	srv.cfg = *cfg
+
+	if srv.cfg.MetricName == "" {
+		srv.cfg.MetricName = srv.cfg.StreamName
+	}
 
 	if srv.cfg.FlushTimeout == 0 {
 		srv.cfg.FlushTimeout = defaultFlushTimeout
@@ -173,7 +189,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 				}
 
 				currPtc := (l / float64(cap(srv.C))) * 100
-				slog.Info("Streamspooler: warm up", "stream", srv.cfg.StreamName, "in-queue", fmt.Sprintf("%d/%d", len(srv.C), cap(srv.C)), "currPct", currPtc)
+				slog.Info("Firehosepool: warm up", "stream", srv.cfg.StreamName, "in-queue", fmt.Sprintf("%d/%d", len(srv.C), cap(srv.C)), "currPct", currPtc)
 
 				return currPtc > srv.cfg.ThresholdWarmUp*100
 			},
@@ -244,7 +260,7 @@ func (srv *Server) Exit() {
 	}
 
 	if len(srv.C) > 0 {
-		slog.Info("Streamspooler: exiting", "messages lost", len(srv.C))
+		slog.Info("Firehosepool: exiting", "messages lost", len(srv.C))
 	}
 
 	close(srv.C)
