@@ -3,20 +3,21 @@ package main
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"math/rand"
+	"net/http"
 	"time"
 
-	"github.com/gabrielperezs/streamspooler/firehosepool"
+	"github.com/gabrielperezs/streamspooler/v2/firehosepool"
 	"github.com/pquerna/ffjson/ffjson"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type record struct {
 	TS int64  `json:"ts,omitempty"`
 	S  string `json:"s,omitempty"`
-}
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
 }
 
 var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -30,12 +31,29 @@ func RandStringRunes(n int) string {
 }
 
 func main() {
+	// logger := slog.New(slog.NewTextHandler(os.Stderr,
+	// 	&slog.HandlerOptions{Level: slog.LevelDebug}))
+	// slog.SetDefault(logger)
+
 	c := firehosepool.Config{
-		StreamName: "firehoseStreamName",
-		Profile:    "yourprofile",
-		Region:     "eu-west-1",
+		StreamName: "testing-stream",
+		// Profile:        "yourprofile",
+		Region:         "eu-west-1",
+		MaxConcatLines: 25,
+		Buffer:         5,
+		ConcatRecords:  true,
+		MinWorkers:     1,
+		MaxWorkers:     5,
+		LogBatchAppend: true,
+		LogRecordWrite: true,
+		EnableMetrics:  true,
 	}
-	p := firehosepool.New(c)
+	p, err := firehosepool.New(c)
+	if err != nil {
+		log.Fatalf("Error starting firehose: %s\n", err)
+	}
+
+	go serveMetrics()
 
 	go func() {
 
@@ -51,19 +69,27 @@ func main() {
 
 			select {
 			case p.C <- r:
+				slog.Info("Record sent")
 			default:
-				log.Printf("Channel closed or full")
+				slog.Error("Channel full")
 				return
 			}
 
-			<-time.After(1 * time.Second)
+			<-time.After(500 * time.Millisecond)
 		}
 	}()
 
 	go func() {
-		<-time.After(60 * time.Second)
+		<-time.After(160 * time.Second)
 		p.Exit()
 	}()
 
 	p.Waiting()
+}
+
+func serveMetrics() {
+	prometheus.Unregister(collectors.NewGoCollector())
+	prometheus.Unregister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	http.Handle("/metrics", promhttp.Handler())
+	slog.Error("metrics and debug server", "error", http.ListenAndServe(":6060", nil))
 }

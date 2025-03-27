@@ -1,12 +1,9 @@
 package firehosepool
 
 import (
-	"log"
+	"fmt"
+	"log/slog"
 	"time"
-
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/firehose"
 )
 
 const (
@@ -14,7 +11,7 @@ const (
 	connectTimeout          = 15 * time.Second
 	errorsFrame             = 10 * time.Second
 	maxErrors               = 10 // Limit of errors to restart the connection
-	limitIntervalConnection = 30 * time.Second
+	limitIntervalConnection = 5 * time.Second
 )
 
 func (srv *Server) _reload() {
@@ -22,11 +19,7 @@ func (srv *Server) _reload() {
 		if srv.isExiting() {
 			continue
 		}
-
-		if err := srv.clientsReset(); err != nil {
-			log.Printf("Firehose ERROR: can't connect to kinesis: %s", err)
-			time.Sleep(connectionRetry)
-		}
+		srv.clientsReset()
 	}
 }
 
@@ -36,17 +29,17 @@ func (srv *Server) failure() {
 	}
 
 	srv.Lock()
-	defer srv.Unlock()
-
-	if time.Now().Sub(srv.lastError) > errorsFrame {
+	if time.Since(srv.lastError) > errorsFrame {
 		srv.errors = 0
 	}
-
 	srv.errors++
+	reload := srv.errors > maxErrors
 	srv.lastError = time.Now()
-	log.Printf("Firehose: %d errors detected", srv.errors)
+	srv.Unlock()
 
-	if srv.errors > maxErrors {
+	slog.Info("Firehosepool failure marked", "stream", srv.cfg.StreamName, "errors", srv.errors, "reload", reload)
+
+	if reload {
 		select {
 		case srv.chReload <- true:
 		default:
@@ -54,70 +47,42 @@ func (srv *Server) failure() {
 	}
 }
 
-func (srv *Server) clientsReset() (err error) {
+func (srv *Server) fhClientReset(cfg *Config) (err error) {
+	if srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
+		slog.Info("Firehosepool: creating new aws firehose client", "stream", srv.cfg.StreamName)
+
+		var fhcg ClientGetter
+		if cfg.FHClientGetter != nil {
+			fhcg = cfg.FHClientGetter
+		} else {
+			fhcg = &FHClientGetter{}
+		}
+
+		srv.awsSvc, err = fhcg.GetClient(cfg)
+		if err != nil {
+			err = fmt.Errorf("firehose init error: %w", err)
+			srv.errors++
+			srv.lastError = time.Now()
+			return
+		}
+		srv.lastConnection = time.Now()
+	}
+	return
+}
+
+func (srv *Server) clientsReset() {
 	srv.Lock()
 	defer srv.Unlock()
 
-	if srv.errors == 0 && srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
-		log.Printf("Firehose Reload config to the stream %s", srv.cfg.StreamName)
-
-		var sess *session.Session
-
-		if srv.cfg.Profile != "" {
-			sess, err = session.NewSessionWithOptions(session.Options{
-				Profile:           srv.cfg.Profile,
-				SharedConfigState: session.SharedConfigEnable,
-			})
-		} else {
-			sess, err = session.NewSession()
-		}
-
-		if err != nil {
-			log.Printf("Firehose ERROR: session: %s", err)
-
-			srv.errors++
-			srv.lastError = time.Now()
-			return err
-		}
-
-		config := &aws.Config{Region: aws.String(srv.cfg.Region)}
-		if srv.cfg.Endpoint != "" {
-			config.Endpoint = aws.String(srv.cfg.Endpoint)
-		}
-
-		srv.awsSvc = firehose.New(sess, config)
-		stream := &firehose.DescribeDeliveryStreamInput{
-			DeliveryStreamName: &srv.cfg.StreamName,
-		}
-
-		var l *firehose.DescribeDeliveryStreamOutput
-		l, err = srv.awsSvc.DescribeDeliveryStream(stream)
-		if err != nil {
-			log.Printf("Firehose ERROR: describe stream: %s", err)
-
-			srv.errors++
-			srv.lastError = time.Now()
-			return err
-		}
-
-		log.Printf("Firehose Connected to %s (%s) status %s",
-			*l.DeliveryStreamDescription.DeliveryStreamName,
-			*l.DeliveryStreamDescription.DeliveryStreamARN,
-			*l.DeliveryStreamDescription.DeliveryStreamStatus)
-
-		srv.lastConnection = time.Now()
-		srv.errors = 0
-	}
-
 	defer func() {
-		log.Printf("Firehose %s clients %d, in the queue %d/%d", srv.cfg.StreamName, len(srv.clients), len(srv.C), cap(srv.C))
+		slog.Info("Firehosepool: workers reset done", "stream", srv.cfg.StreamName, "workers", len(srv.clients), "in-queue", fmt.Sprintf("%d/%d", len(srv.C), cap(srv.C)))
 	}()
 
 	currClients := len(srv.clients)
 
 	// No changes in the number of clients
 	if currClients == srv.cliDesired {
-		return nil
+		return
 	}
 
 	// If the config define lower number than the active clients remove the difference
@@ -134,6 +99,4 @@ func (srv *Server) clientsReset() (err error) {
 			srv.clients = append(srv.clients, NewClient(srv))
 		}
 	}
-
-	return nil
 }

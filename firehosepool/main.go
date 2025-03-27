@@ -2,47 +2,68 @@ package firehosepool
 
 import (
 	"errors"
-	"log"
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/service/firehose"
-	"github.com/gabrielperezs/monad"
+	"github.com/aws/aws-sdk-go-v2/service/firehose"
+	"github.com/gabrielperezs/streamspooler/v2/monad"
 )
 
 const (
 	defaultBufferSize      = 1024
 	defaultWorkers         = 1
 	defaultMaxWorkers      = 10
-	defaultMaxRecords      = 500
+	defaultMaxLines        = 500
 	defaultThresholdWarmUp = 0.6
 	defaultCoolDownPeriod  = 15 * time.Second
+	defaultFlushTimeout    = 15 * time.Second
+	defaultFlushCron       = 59*time.Minute + 30*time.Second
 )
+
+var ErrConfig = errors.New("firehose config error")
 
 // Config is the general configuration for the server
 type Config struct {
-	// Internal clients details
+	// Internal workers details
 	MinWorkers      int
 	MaxWorkers      int
 	ThresholdWarmUp float64
-	Interval        time.Duration
+	Interval        time.Duration // Interval for monad workers evaluation period. Default 500ms
 	CoolDownPeriod  time.Duration
 	Critical        bool // Handle this stream as critical
 	Serializer      func(i interface{}) ([]byte, error)
 
+	// Flush timers
+	FlushTimeout time.Duration // Max time between flushes. Will force a flush after 15m
+	FlushCron    time.Duration // Hourly Cron for flushing. Default to 59m 30s, ticking hourly at hh:59:30.
+
 	// Limits
-	Buffer        int
-	ConcatRecords bool // Contact many rows in one firehose record
-	MaxRecords    int  // To send in batch to Kinesis
-	Compress      bool // Compress records with snappy
+	Buffer         int
+	ConcatRecords  bool // Contact many rows in one firehose record
+	MaxConcatLines int  // Max Concat Lines per record. Default 500
+	MaxRecords     int  // Max records per batch. Max 500 (firehose hard limit), default 500
+	Compress       bool // Compress records with snappy
 
-	// Authentication and enpoints
-	StreamName string // Kinesis/Firehose stream name
-	Region     string // AWS region
-	Profile    string // AWS Profile name
-	Endpoint   string // AWS endpoint
+	// Firehose details
+	StreamName     string       // AWS Data Firehose stream name
+	Region         string       // AWS region
+	Profile        string       // AWS Profile name
+	Endpoint       string       // AWS endpoint
+	FHClientGetter ClientGetter // Allow injecting a custom firehose client getter. Mostly for mock testing
 
+	// Callbacks
 	OnFHError func(e error)
+
+	// Prometheus metrics
+	EnableMetrics bool
+	MetricLabel   string // Label for the prometheus metrics. Default to the StreamName
+
+	// Logging for detailed debugging. Enabling it can be too verbose
+	LogBatchAppend bool // Log each batch record append with detailed sizes and counts for buffer and batch
+	LogRecordWrite bool // Log each record buffer write with detailed sizes an counts.
+	LogFlushes     bool // Log each flush with detailed sizes and counts
 }
 
 type Server struct {
@@ -59,19 +80,18 @@ type Server struct {
 	chDone   chan bool
 	exiting  bool
 
-	awsSvc         *firehose.Firehose
+	awsSvc         *firehose.Client
 	lastConnection time.Time
 	lastError      time.Time
 	errors         int64
 }
 
 // New create a pool of workers
-func New(cfg Config) *Server {
+func New(cfg Config) (*Server, error) {
 
 	if cfg.Buffer == 0 {
 		cfg.Buffer = defaultBufferSize
 	}
-
 	srv := &Server{
 		chDone:   make(chan bool, 1),
 		chReload: make(chan bool, 1),
@@ -80,9 +100,12 @@ func New(cfg Config) *Server {
 
 	go srv._reload()
 
-	srv.Reload(&cfg)
+	err := srv.Reload(&cfg)
+	if err != nil {
+		return nil, err
+	}
 
-	return srv
+	return srv, nil
 }
 
 // Reload the configuration
@@ -90,10 +113,43 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	srv.Lock()
 	defer srv.Unlock()
 
+	// SetLogger(cfg.Logger, cfg.LogLevel)
+
+	if cfg.Compress && cfg.ConcatRecords {
+		return fmt.Errorf("%w: cannot compress and concat records", ErrConfig)
+	}
+
+	if err = srv.fhClientReset(cfg); err != nil {
+		slog.Error("Firehosepool: reload aborted due to firehose client error", "stream", srv.cfg.StreamName, "error", err)
+		return
+	}
+
+	if cfg.EnableMetrics && !srv.cfg.EnableMetrics {
+		registerMetrics()
+	} else if !cfg.EnableMetrics && srv.cfg.EnableMetrics {
+		unRegisterMetrics()
+	}
+
 	srv.cfg = *cfg
+
+	if srv.cfg.MetricLabel == "" {
+		srv.cfg.MetricLabel = srv.cfg.StreamName
+	}
+
+	if srv.cfg.FlushTimeout == 0 {
+		srv.cfg.FlushTimeout = defaultFlushTimeout
+	}
+
+	if srv.cfg.FlushCron == 0 {
+		srv.cfg.FlushCron = defaultFlushCron
+	}
 
 	if srv.cfg.MaxWorkers == 0 {
 		srv.cfg.MaxWorkers = defaultMaxWorkers
+	}
+
+	if srv.cfg.MinWorkers == 0 {
+		srv.cfg.MinWorkers = 1
 	}
 
 	if srv.cfg.ThresholdWarmUp == 0 {
@@ -104,13 +160,21 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		srv.cfg.CoolDownPeriod = defaultCoolDownPeriod
 	}
 
+	if srv.cfg.MaxConcatLines == 0 {
+		srv.cfg.MaxConcatLines = defaultMaxLines
+	}
+
 	if srv.cfg.MaxRecords == 0 {
-		srv.cfg.MaxRecords = defaultMaxRecords
+		srv.cfg.MaxRecords = maxBatchRecords
+	}
+
+	if srv.cfg.MaxRecords > 500 {
+		srv.cfg.MaxRecords = 500
 	}
 
 	if srv.cfg.MaxWorkers > srv.cfg.MinWorkers {
 		monadCfg := &monad.Config{
-			Min:            uint64(1),
+			Min:            uint64(srv.cfg.MinWorkers),
 			Max:            uint64(srv.cfg.MaxWorkers),
 			Interval:       srv.cfg.Interval,
 			CoolDownPeriod: srv.cfg.CoolDownPeriod,
@@ -125,11 +189,9 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 				}
 
 				currPtc := (l / float64(cap(srv.C))) * 100
+				slog.Info("Firehosepool: warm up", "stream", srv.cfg.StreamName, "in-queue", fmt.Sprintf("%d/%d", len(srv.C), cap(srv.C)), "currPct", currPtc)
 
-				if currPtc > srv.cfg.ThresholdWarmUp*100 {
-					return true
-				}
-				return false
+				return currPtc > srv.cfg.ThresholdWarmUp*100
 			},
 			DesireFn: func(n uint64) {
 				srv.cliDesired = int(n)
@@ -146,13 +208,12 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 			go srv.monad.Reload(monadCfg)
 		}
 	} else {
-		srv.cliDesired = srv.cfg.MaxWorkers
-		for len(srv.clients) < srv.cliDesired {
-			srv.clients = append(srv.clients, NewClient(srv))
+		if srv.monad != nil {
+			srv.monad.Exit()
+			srv.monad = nil
 		}
+		srv.cliDesired = srv.cfg.MaxWorkers
 	}
-
-	log.Printf("Firehose config: %#v", srv.cfg)
 
 	select {
 	case srv.chReload <- true:
@@ -164,10 +225,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 
 // Flush terminate all clients and close the channels
 func (srv *Server) Flush() (err error) {
-	srv.Lock()
-	defer srv.Unlock()
-
-	if srv.exiting {
+	if srv.isExiting() {
 		return nil
 	}
 
@@ -178,7 +236,7 @@ func (srv *Server) Flush() (err error) {
 	for _, c := range srv.clients {
 		f := <-c.flushed
 		if !f {
-			return errors.New("Flushed failed")
+			return errors.New("flushed failed")
 		}
 	}
 
@@ -206,7 +264,7 @@ func (srv *Server) Exit() {
 	}
 
 	if len(srv.C) > 0 {
-		log.Printf("Firehose: messages lost %d", len(srv.C))
+		slog.Info("Firehosepool: exiting", "messages lost", len(srv.C))
 	}
 
 	close(srv.C)
@@ -218,12 +276,7 @@ func (srv *Server) Exit() {
 func (srv *Server) isExiting() bool {
 	srv.Lock()
 	defer srv.Unlock()
-
-	if srv.exiting {
-		return true
-	}
-
-	return false
+	return srv.exiting
 }
 
 // Waiting to the server if is running
