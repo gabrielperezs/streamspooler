@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/gabrielperezs/streamspooler/firehose"
+	"github.com/gabrielperezs/streamspooler/firehosepool"
 	"github.com/pquerna/ffjson/ffjson"
 )
 
@@ -30,12 +30,12 @@ func RandStringRunes(n int) string {
 }
 
 func main() {
-	c := firehosePool.Config{
+	c := firehosepool.Config{
 		StreamName: "firehoseStreamName",
 		Profile:    "yourprofile",
 		Region:     "eu-west-1",
 	}
-	p := firehosePool.New(c)
+	p := firehosepool.New(c)
 
 	go func() {
 

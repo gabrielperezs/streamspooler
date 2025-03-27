@@ -1,4 +1,4 @@
-package firehosePool
+package firehosepool
 
 import (
 	"log"
