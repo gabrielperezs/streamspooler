@@ -142,7 +142,7 @@ func (clt *Client) listen() {
 							"record-size", fmt.Sprintf("%d/%dB", clt.buff.Len(), maxRecordSize),
 							"record-lines", fmt.Sprintf("%d/%d", clt.lines, clt.srv.cfg.MaxConcatLines),
 							"batch-records", fmt.Sprintf("%d/%d", len(clt.batch)+1, clt.srv.cfg.MaxRecords),
-							"batch-size", fmt.Sprintf("%d/%dB", clt.totalBatchSize(), maxBatchSize))
+							"batch-size", fmt.Sprintf("%d/%dB", clt.batchSize, maxBatchSize))
 					}
 					clt.buff = pool.Get()
 					clt.batch = append(clt.batch, clt.buff)
