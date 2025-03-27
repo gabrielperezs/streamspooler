@@ -208,6 +208,10 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 			go srv.monad.Reload(monadCfg)
 		}
 	} else {
+		if srv.monad != nil {
+			srv.monad.Exit()
+			srv.monad = nil
+		}
 		srv.cliDesired = srv.cfg.MaxWorkers
 	}
 
