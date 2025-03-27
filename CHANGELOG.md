@@ -15,7 +15,7 @@
 
 - Changed major version to v2
 - firehosepool.New now returns also an error, allowing failing fast at runtime if there are errors with the firehose client setup.
-  Workers reload separated from firehose reload. Also fixes reload problem when firehose was failing.
+- Workers reload separated from firehose reload. Also fixes reload problem when firehose was failing.
 - Changed aws-sdk-go to v2
 - Max batch size was 3 MiB. The correct max supported is 4MiB
 - Max Record size was 1000 KB. The correct one is 1000 KiB

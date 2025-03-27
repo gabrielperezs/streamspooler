@@ -47,7 +47,7 @@ type Config struct {
 	Compress       bool // Compress records with snappy
 
 	// Firehose details
-	StreamName     string       // Kinesis/Firehose stream name
+	StreamName     string       // AWS Data Firehose stream name
 	Region         string       // AWS region
 	Profile        string       // AWS Profile name
 	Endpoint       string       // AWS endpoint
@@ -58,7 +58,7 @@ type Config struct {
 
 	// Prometheus metrics
 	EnableMetrics bool
-	MetricName    string // Name for the prometheus metrics. Default to the StreamName
+	MetricLabel   string // Label for the prometheus metrics. Default to the StreamName
 
 	// Logging for detailed debugging. Enabling it can be too verbose
 	LogBatchAppend bool // Log each batch record append with detailed sizes and counts for buffer and batch
@@ -132,8 +132,8 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 
 	srv.cfg = *cfg
 
-	if srv.cfg.MetricName == "" {
-		srv.cfg.MetricName = srv.cfg.StreamName
+	if srv.cfg.MetricLabel == "" {
+		srv.cfg.MetricLabel = srv.cfg.StreamName
 	}
 
 	if srv.cfg.FlushTimeout == 0 {

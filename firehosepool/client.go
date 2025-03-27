@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	maxRecordSize   = 1000 * 1024 // The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1024 KB
+	maxRecordSize   = 1000 * 1024 // The maximum size of a record sent to Data Firehose, before base64-encoding, is 1024 KB
 	maxBatchRecords = 500         // The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
 	maxBatchSize    = 4 << 20     // 4 MiB per call
 
@@ -124,10 +124,10 @@ func (clt *Client) listen() {
 			// The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
 			// force flush if any limit reached
 			if len(clt.batch) >= clt.srv.cfg.MaxRecords {
-				metricFlushesMaxRecords.WithLabelValues(clt.srv.cfg.MetricName).Inc()
+				metricFlushesMaxRecords.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
 				clt.flush()
 			} else if clt.exceedsMaxBatchSize(recordSize) {
-				metricFlushesMaxSize.WithLabelValues(clt.srv.cfg.MetricName).Inc()
+				metricFlushesMaxSize.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
 				clt.flush()
 			}
 
@@ -163,10 +163,10 @@ func (clt *Client) listen() {
 			}
 
 		case <-clt.t.C:
-			metricFlushesTime.WithLabelValues(clt.srv.cfg.MetricName).Inc()
+			metricFlushesTime.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
 			clt.flush()
 		case <-clt.cron.C:
-			metricFlushesTime.WithLabelValues(clt.srv.cfg.MetricName).Inc()
+			metricFlushesTime.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
 			clt.flush()
 
 		case f := <-clt.finish:
@@ -263,8 +263,8 @@ func (clt *Client) flush() error {
 			"err", err)
 	}
 	if err == nil {
-		metricBatchRecords.WithLabelValues(clt.srv.cfg.MetricName).Observe(float64(len(clt.batch)))
-		metricBatchSizeKiB.WithLabelValues(clt.srv.cfg.MetricName).Observe(float64(clt.totalBatchSize()) / 1024)
+		metricBatchRecords.WithLabelValues(clt.srv.cfg.MetricLabel).Observe(float64(len(clt.batch)))
+		metricBatchSizeKiB.WithLabelValues(clt.srv.cfg.MetricLabel).Observe(float64(clt.totalBatchSize()) / 1024)
 	}
 
 	if err != nil {
@@ -274,10 +274,10 @@ func (clt *Client) flush() error {
 		var ae smithy.APIError
 		if errors.As(err, &ae) && ae.ErrorCode() == "ThrottlingException" {
 			slog.Error("Firehosepool flush: firehose  Throttling error", "err", err, "worker", clt)
-			metricFlushThrottled.WithLabelValues(clt.srv.cfg.MetricName).Inc()
+			metricFlushThrottled.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
 		} else {
 			slog.Error("Firehosepool flush: firehose PutRecordBatch error", "err", err, "worker", clt)
-			metricFlushErrors.WithLabelValues(clt.srv.cfg.MetricName).Inc()
+			metricFlushErrors.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
 		}
 		clt.srv.failure()
 
@@ -297,7 +297,7 @@ func (clt *Client) flush() error {
 		}
 	} else if *output.FailedPutCount > 0 {
 		slog.Info("Firehosepool worker flush: firehose partial failure, records sent back to the buffer", "worker", clt, "failed-put-count", *output.FailedPutCount)
-		metricFlushPartialFailed.WithLabelValues(clt.srv.cfg.MetricName).Add(float64(*output.FailedPutCount))
+		metricFlushPartialFailed.WithLabelValues(clt.srv.cfg.MetricLabel).Add(float64(*output.FailedPutCount))
 		// Sleep few millisecond because the partial failure
 		time.Sleep(partialFailureWait)
 
@@ -350,7 +350,7 @@ func (clt *Client) retry(orig []byte) {
 	if len(orig) == 0 {
 		return
 	}
-	metricRecordRetry.WithLabelValues(clt.srv.cfg.MetricName).Inc()
+	metricRecordRetry.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
 
 	// Remove the last byte, is a newLine
 	b := make([]byte, len(orig)-len(newLine))

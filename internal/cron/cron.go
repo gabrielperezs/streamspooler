@@ -29,23 +29,21 @@ func New(d time.Duration) *Cron {
 		done: make(chan struct{}),
 		d:    d,
 	}
-	t.start()
+	go t.start()
 	return t
 }
 
 func (c *Cron) start() {
-	go func() {
-		c.t = time.NewTimer(c.next(time.Now()))
-		for {
-			select {
-			case n := <-c.t.C:
-				c.C <- n
-				c.t.Reset(c.next(time.Now()))
-			case <-c.done:
-				return
-			}
+	c.t = time.NewTimer(c.next(time.Now()))
+	for {
+		select {
+		case n := <-c.t.C:
+			c.C <- n
+			c.t.Reset(c.next(time.Now()))
+		case <-c.done:
+			return
 		}
-	}()
+	}
 }
 
 func (c *Cron) Stop() bool {
