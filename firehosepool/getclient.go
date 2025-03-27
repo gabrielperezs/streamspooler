@@ -40,7 +40,7 @@ func (c *FHClientGetter) GetClient(cfg *Config) (*firehose.Client, error) {
 	var l *firehose.DescribeDeliveryStreamOutput
 	l, err = cli.DescribeDeliveryStream(context.TODO(), stream)
 	if err != nil {
-		return cli, fmt.Errorf("firehose GetClient ERROR: describe stream: %w", err)
+		return nil, fmt.Errorf("firehose GetClient ERROR: describe stream: %w", err)
 	}
 
 	slog.Info("Firehosepool: Firehose Connected",
