@@ -131,7 +131,7 @@ func (clt *Client) listen() {
 				clt.flush()
 			}
 
-			// The maximum size of a record sent to Kinesis Firehose, before base64-encoding, is 1000 KB.
+			// The maximum size of a record sent to Amazon Data Firehose. Before base64-encoding, is 1000 KiB.
 			if !clt.srv.cfg.ConcatRecords || clt.buff.Len()+recordSize+1 >= maxRecordSize || clt.lines >= clt.srv.cfg.MaxConcatLines {
 				if clt.buff.Len() > 0 {
 					// Create new record on batch
