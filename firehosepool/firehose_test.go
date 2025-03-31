@@ -60,7 +60,7 @@ func TestTrottlingError(t *testing.T) {
 	log.Printf("test message sent")
 
 	for trials := 0; len(p.clients) == 0 && trials < 5; trials++ {
-		time.Sleep(1 * time.Second)
+		time.Sleep(50 * time.Millisecond)
 	}
 	if len(p.clients) == 0 {
 		t.Fatalf("Firehose: no client created\n")
