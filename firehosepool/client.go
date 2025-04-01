@@ -80,7 +80,7 @@ func NewClient(srv *Server) *Client {
 func (clt *Client) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.Int64("ID", clt.ID),
-		slog.String("Stream", clt.srv.cfg.StreamName),
+		slog.String("stream", clt.srv.cfg.Label),
 	)
 }
 
@@ -124,10 +124,10 @@ func (clt *Client) listen() {
 			// The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
 			// force flush if any limit reached
 			if len(clt.batch) >= clt.srv.cfg.MaxRecords {
-				metricFlushesMaxRecords.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
+				metricFlushesMaxRecords.WithLabelValues(clt.srv.cfg.Label).Inc()
 				clt.flush()
 			} else if clt.exceedsMaxBatchSize(recordSize) {
-				metricFlushesMaxSize.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
+				metricFlushesMaxSize.WithLabelValues(clt.srv.cfg.Label).Inc()
 				clt.flush()
 			}
 
@@ -163,10 +163,10 @@ func (clt *Client) listen() {
 			}
 
 		case <-clt.t.C:
-			metricFlushesTime.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
+			metricFlushesTime.WithLabelValues(clt.srv.cfg.Label).Inc()
 			clt.flush()
 		case <-clt.cron.C:
-			metricFlushesTime.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
+			metricFlushesTime.WithLabelValues(clt.srv.cfg.Label).Inc()
 			clt.flush()
 
 		case f := <-clt.finish:
@@ -263,8 +263,8 @@ func (clt *Client) flush() error {
 			"err", err)
 	}
 	if err == nil {
-		metricBatchRecords.WithLabelValues(clt.srv.cfg.MetricLabel).Observe(float64(len(clt.batch)))
-		metricBatchSizeKiB.WithLabelValues(clt.srv.cfg.MetricLabel).Observe(float64(clt.totalBatchSize()) / 1024)
+		metricBatchRecords.WithLabelValues(clt.srv.cfg.Label).Observe(float64(len(clt.batch)))
+		metricBatchSizeKiB.WithLabelValues(clt.srv.cfg.Label).Observe(float64(clt.totalBatchSize()) / 1024)
 	}
 
 	if err != nil {
@@ -274,10 +274,10 @@ func (clt *Client) flush() error {
 		var ae smithy.APIError
 		if errors.As(err, &ae) && ae.ErrorCode() == "ThrottlingException" {
 			slog.Error("Firehosepool flush: firehose  Throttling error", "err", err, "worker", clt)
-			metricFlushThrottled.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
+			metricFlushThrottled.WithLabelValues(clt.srv.cfg.Label).Inc()
 		} else {
 			slog.Error("Firehosepool flush: firehose PutRecordBatch error", "err", err, "worker", clt)
-			metricFlushErrors.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
+			metricFlushErrors.WithLabelValues(clt.srv.cfg.Label).Inc()
 		}
 		clt.srv.failure()
 
@@ -297,7 +297,7 @@ func (clt *Client) flush() error {
 		}
 	} else if *output.FailedPutCount > 0 {
 		slog.Info("Firehosepool worker flush: firehose partial failure, records sent back to the buffer", "worker", clt, "failed-put-count", *output.FailedPutCount)
-		metricFlushPartialFailed.WithLabelValues(clt.srv.cfg.MetricLabel).Add(float64(*output.FailedPutCount))
+		metricFlushPartialFailed.WithLabelValues(clt.srv.cfg.Label).Add(float64(*output.FailedPutCount))
 		// Sleep few millisecond because the partial failure
 		time.Sleep(partialFailureWait)
 
@@ -350,7 +350,7 @@ func (clt *Client) retry(orig []byte) {
 	if len(orig) == 0 {
 		return
 	}
-	metricRecordRetry.WithLabelValues(clt.srv.cfg.MetricLabel).Inc()
+	metricRecordRetry.WithLabelValues(clt.srv.cfg.Label).Inc()
 
 	// Remove the last byte, is a newLine
 	b := make([]byte, len(orig)-len(newLine))

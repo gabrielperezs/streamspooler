@@ -58,7 +58,7 @@ type Config struct {
 
 	// Prometheus metrics
 	EnableMetrics bool
-	MetricLabel   string // Label for the prometheus metrics. Default to the StreamName
+	Label         string // Label for logs and prometheus metrics. Default to the StreamName
 
 	// Logging for detailed debugging. Enabling it can be too verbose
 	LogBatchAppend bool // Log each batch record append with detailed sizes and counts for buffer and batch
@@ -132,8 +132,8 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 
 	srv.cfg = *cfg
 
-	if srv.cfg.MetricLabel == "" {
-		srv.cfg.MetricLabel = srv.cfg.StreamName
+	if srv.cfg.Label == "" {
+		srv.cfg.Label = srv.cfg.StreamName
 	}
 
 	if srv.cfg.FlushTimeout == 0 {
