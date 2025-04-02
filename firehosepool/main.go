@@ -36,7 +36,7 @@ type Config struct {
 	Serializer      func(i interface{}) ([]byte, error)
 
 	// Flush timers
-	FlushTimeout time.Duration // Max time between flushes. Will force a flush after 15m
+	FlushTimeout time.Duration // Max time between flushes. Defaults to 15s
 	FlushCron    time.Duration // Hourly Cron for flushing. Default to 59m 30s, ticking hourly at hh:59:30.
 
 	// Limits
