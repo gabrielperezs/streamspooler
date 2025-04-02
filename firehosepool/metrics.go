@@ -7,21 +7,11 @@ const (
 )
 
 var (
-	metricFlushesTime = prometheus.NewCounterVec(prometheus.CounterOpts{
+	metricFlushesBySource = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
-		Name:      "flushes_by_time",
-		Help:      "Flushes triggered by max time or cron",
-	}, []string{"stream"})
-	metricFlushesMaxSize = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "flushes_by_max_size",
-		Help:      "Flushes triggered by max batch size",
-	}, []string{"stream"})
-	metricFlushesMaxRecords = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "flushes_by_max_records",
-		Help:      "Flushes triggered by max num records per batch",
-	}, []string{"stream"})
+		Name:      "flushes_by_trigger",
+		Help:      "Flushes by trigger source (timer, cron, max-size, max-records, finish)",
+	}, []string{"stream", "trigger"})
 	metricFlushErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "flush_errors",
@@ -52,14 +42,12 @@ var (
 		Namespace: namespace,
 		Name:      "batch_records",
 		Help:      "flush batch size in KiB",
-		Buckets:   prometheus.ExponentialBuckets(1, 2.8, 7), // 1 to 481.89. 500 (max) would be +inf
+		Buckets:   []float64{1, 5, 20, 100, 250, 400},
 	}, []string{"stream"})
 )
 
 func registerMetrics() {
-	prometheus.Register(metricFlushesTime)
-	prometheus.Register(metricFlushesMaxSize)
-	prometheus.Register(metricFlushesMaxRecords)
+	prometheus.Register(metricFlushesBySource)
 	prometheus.Register(metricFlushErrors)
 	prometheus.Register(metricFlushThrottled)
 	prometheus.Register(metricFlushPartialFailed)
@@ -69,12 +57,10 @@ func registerMetrics() {
 }
 
 func unRegisterMetrics() {
-	prometheus.Unregister(metricFlushesTime)
-	prometheus.Unregister(metricFlushesMaxSize)
-	prometheus.Unregister(metricFlushesMaxRecords)
+	prometheus.Unregister(metricFlushesBySource)
 	prometheus.Unregister(metricFlushErrors)
 	prometheus.Unregister(metricFlushThrottled)
-	prometheus.Unregister(metricFlushPartialFailed.MetricVec)
+	prometheus.Unregister(metricFlushPartialFailed)
 	prometheus.Unregister(metricRecordRetry)
 	prometheus.Unregister(metricBatchSizeKiB)
 	prometheus.Unregister(metricBatchRecords)

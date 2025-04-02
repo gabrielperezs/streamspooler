@@ -27,6 +27,11 @@ const (
 	globalFailureWait  = 500 * time.Millisecond
 	onFlyRetryLimit    = 1024 * 2
 	firehoseError      = "InternalFailure"
+	triggerTimer       = "timer"
+	triggerCron        = "cron"
+	triggerMaxSize     = "max-size"
+	triggerMaxRecords  = "max-records"
+	triggerFinish      = "finish"
 )
 
 var (
@@ -124,11 +129,9 @@ func (clt *Client) listen() {
 			// The PutRecordBatch operation can take up to 500 records per call or 4 MB per call, whichever is smaller. This limit cannot be changed.
 			// force flush if any limit reached
 			if len(clt.batch) >= clt.srv.cfg.MaxRecords {
-				metricFlushesMaxRecords.WithLabelValues(clt.srv.cfg.Label).Inc()
-				clt.flush()
+				clt.flush(triggerMaxRecords)
 			} else if clt.exceedsMaxBatchSize(recordSize) {
-				metricFlushesMaxSize.WithLabelValues(clt.srv.cfg.Label).Inc()
-				clt.flush()
+				clt.flush(triggerMaxSize)
 			}
 
 			// The maximum size of a record sent to Amazon Data Firehose. Before base64-encoding, is 1000 KiB.
@@ -163,11 +166,9 @@ func (clt *Client) listen() {
 			}
 
 		case <-clt.t.C:
-			metricFlushesTime.WithLabelValues(clt.srv.cfg.Label).Inc()
-			clt.flush()
+			clt.flush(triggerTimer)
 		case <-clt.cron.C:
-			metricFlushesTime.WithLabelValues(clt.srv.cfg.Label).Inc()
-			clt.flush()
+			clt.flush(triggerCron)
 
 		case f := <-clt.finish:
 			//Stop the timers
@@ -178,7 +179,7 @@ func (clt *Client) listen() {
 			}
 
 			var err error
-			err = clt.flush()
+			err = clt.flush(triggerFinish)
 
 			if err != nil {
 				slog.Error("Firehosepool error flushing", "err", err, "worker", clt)
@@ -225,7 +226,7 @@ func (clt *Client) batchRecords() int {
 }
 
 // flush build the last record if need and send the records slice to AWS Firehose
-func (clt *Client) flush() error {
+func (clt *Client) flush(trigger string) error {
 
 	// no longer needed Stop and drain after go 1.23
 	clt.t.Reset(clt.srv.cfg.FlushTimeout)
@@ -255,6 +256,7 @@ func (clt *Client) flush() error {
 		DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
 		Records:            clt.records,
 	})
+	metricFlushesBySource.WithLabelValues(clt.srv.cfg.Label, trigger).Inc()
 	if clt.srv.cfg.LogFlushes {
 		slog.Info("Firehosepool worker flushed",
 			"worker", clt,
