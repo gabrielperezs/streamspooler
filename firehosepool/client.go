@@ -256,7 +256,7 @@ func (clt *Client) flush(trigger string) error {
 		DeliveryStreamName: aws.String(clt.srv.cfg.StreamName),
 		Records:            clt.records,
 	})
-	metricFlushesBySource.WithLabelValues(clt.srv.cfg.Label, trigger).Inc()
+	metricFlushesByTrigger.WithLabelValues(clt.srv.cfg.Label, trigger).Inc()
 	if clt.srv.cfg.LogFlushes {
 		slog.Info("Firehosepool worker flushed",
 			"worker", clt,

@@ -7,7 +7,7 @@ const (
 )
 
 var (
-	metricFlushesBySource = prometheus.NewCounterVec(prometheus.CounterOpts{
+	metricFlushesByTrigger = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "flushes_by_trigger",
 		Help:      "Flushes by trigger source (timer, cron, max-size, max-records, finish)",
@@ -47,7 +47,7 @@ var (
 )
 
 func registerMetrics() {
-	prometheus.Register(metricFlushesBySource)
+	prometheus.Register(metricFlushesByTrigger)
 	prometheus.Register(metricFlushErrors)
 	prometheus.Register(metricFlushThrottled)
 	prometheus.Register(metricFlushPartialFailed)
@@ -57,7 +57,7 @@ func registerMetrics() {
 }
 
 func unRegisterMetrics() {
-	prometheus.Unregister(metricFlushesBySource)
+	prometheus.Unregister(metricFlushesByTrigger)
 	prometheus.Unregister(metricFlushErrors)
 	prometheus.Unregister(metricFlushThrottled)
 	prometheus.Unregister(metricFlushPartialFailed)
