@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,7 +42,6 @@ var pool = &bytebufferpool.Pool{}
 
 // Client is the thread that connect to the remote redis server
 type Client struct {
-	sync.Mutex
 	srv        *Server
 	buff       *bytebufferpool.ByteBuffer
 	lines      int

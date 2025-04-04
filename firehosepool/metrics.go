@@ -44,6 +44,16 @@ var (
 		Help:      "flush batch size in KiB",
 		Buckets:   []float64{1, 5, 20, 100, 250, 400},
 	}, []string{"stream"})
+	metricWorkers = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "workers",
+		Help:      "Number of firehosepool workers",
+	}, []string{"stream"})
+	metricChannelPercentBusy = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "channel_busy_pct",
+		Help:      "Percentage of receiving channel busy",
+	}, []string{"stream"})
 )
 
 func registerMetrics() {
@@ -54,6 +64,8 @@ func registerMetrics() {
 	prometheus.Register(metricRecordRetry)
 	prometheus.Register(metricBatchSizeKiB)
 	prometheus.Register(metricBatchRecords)
+	prometheus.Register(metricWorkers)
+	prometheus.Register(metricChannelPercentBusy)
 }
 
 func unRegisterMetrics() {
@@ -64,4 +76,6 @@ func unRegisterMetrics() {
 	prometheus.Unregister(metricRecordRetry)
 	prometheus.Unregister(metricBatchSizeKiB)
 	prometheus.Unregister(metricBatchRecords)
+	prometheus.Unregister(metricWorkers)
+	prometheus.Unregister(metricChannelPercentBusy)
 }

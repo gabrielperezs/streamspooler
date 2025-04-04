@@ -27,12 +27,12 @@ var ErrConfig = errors.New("firehose config error")
 // Config is the general configuration for the server
 type Config struct {
 	// Internal workers details
-	MinWorkers      int
-	MaxWorkers      int
-	ThresholdWarmUp float64
-	Interval        time.Duration // Interval for monad workers evaluation period. Default 500ms
-	CoolDownPeriod  time.Duration
-	Critical        bool // Handle this stream as critical
+	MinWorkers      int           // Min number of workers. Default 1
+	MaxWorkers      int           // Max number of workers. Default 10.
+	ThresholdWarmUp float64       // busy ratio of the receive channel to start warming up workers. Default 0.6
+	Interval        time.Duration // Interval for workers evaluation period. Default 500ms
+	CoolDownPeriod  time.Duration // Cool down period for scaling workers. Default 10s
+	Critical        bool          // Handle this stream as critical
 	Serializer      func(i interface{}) ([]byte, error)
 
 	// Flush timers
@@ -40,7 +40,7 @@ type Config struct {
 	FlushCron    time.Duration // Hourly Cron for flushing. Default to 59m 30s, ticking hourly at hh:59:30.
 
 	// Limits
-	Buffer         int
+	Buffer         int  // Buffer size for the receiving srv.C channel. Default 1024
 	ConcatRecords  bool // Contact many rows in one firehose record
 	MaxConcatLines int  // Max Concat Lines per record. Default 500
 	MaxRecords     int  // Max records per batch. Max 500 (firehose hard limit), default 500
@@ -178,21 +178,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 			Max:            uint64(srv.cfg.MaxWorkers),
 			Interval:       srv.cfg.Interval,
 			CoolDownPeriod: srv.cfg.CoolDownPeriod,
-			WarmFn: func() bool {
-				if srv.cliDesired == 0 {
-					return true
-				}
-
-				l := float64(len(srv.C))
-				if l == 0 {
-					return false
-				}
-
-				currPtc := (l / float64(cap(srv.C))) * 100
-				slog.Info("Firehosepool: warm up", "stream", srv.cfg.StreamName, "in-queue", fmt.Sprintf("%d/%d", len(srv.C), cap(srv.C)), "currPct", currPtc)
-
-				return currPtc > srv.cfg.ThresholdWarmUp*100
-			},
+			WarmFn:         srv.needsWarmup,
 			DesireFn: func(n uint64) {
 				srv.cliDesired = int(n)
 				select {
@@ -221,6 +207,26 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	}
 
 	return nil
+}
+
+func (srv *Server) needsWarmup() bool {
+	if srv.cliDesired == 0 {
+		return true
+	}
+
+	l := float64(len(srv.C))
+	if l == 0 {
+		metricChannelPercentBusy.WithLabelValues(srv.cfg.Label).Set(0)
+		return false
+	}
+
+	currPtc := (l / float64(cap(srv.C))) * 100
+	slog.Debug("Firehosepool: warmup check", "stream", srv.cfg.Label, "in-queue", fmt.Sprintf("%d/%d", len(srv.C), cap(srv.C)), "currPct", currPtc)
+
+	// currently this metric will be reported only if monad is enabled.
+	metricChannelPercentBusy.WithLabelValues(srv.cfg.Label).Set(currPtc)
+
+	return currPtc > srv.cfg.ThresholdWarmUp*100
 }
 
 // Flush terminate all clients and close the channels

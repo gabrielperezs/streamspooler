@@ -1,3 +1,4 @@
+// https://github.com/gabrielperezs/monad
 package monad
 
 import (
@@ -104,7 +105,6 @@ func (m *Monad) monitor() {
 					m.lastActivty = time.Now()
 				}
 			}
-			// log.Printf("MONAD Queue: warm=%v, Desired %d, lastActivity: %s", l, m.desired, m.lastActivty)
 		}
 	}
 }

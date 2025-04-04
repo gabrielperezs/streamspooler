@@ -99,4 +99,5 @@ func (srv *Server) clientsReset() {
 			srv.clients = append(srv.clients, NewClient(srv))
 		}
 	}
+	metricWorkers.WithLabelValues(srv.cfg.StreamName).Set(float64(len(srv.clients)))
 }
