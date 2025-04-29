@@ -6,6 +6,15 @@
 
 - Some logs where referencing a wrong StreamName variable.
 - Added missing CHANGELOG version links.
+- fix maxRecordSize counting the return carriage concat by one byte.
+- fix flush counting totalBatchSize to check records not flushed.
+
+### Changed
+
+- Use metric Workers by label instead of stream name, just like other metrics.
+- Do not write newLine when ConcatRecords=false
+
+
 
 ## [2.0.0] - 2025-04-04
 

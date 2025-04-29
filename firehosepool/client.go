@@ -117,8 +117,8 @@ func (clt *Client) listen() {
 				recordSize = len(r)
 			}
 
-			if recordSize > maxRecordSize {
-				slog.Error("firehose ERROR: one record is over the limitd", "worker", clt, "recordSize", recordSize, "maxRecordSize", maxRecordSize)
+			if recordSize+1 > maxRecordSize {
+				slog.Error("firehosepool ERROR: one record is over the limit", "worker", clt, "recordSize", recordSize, "maxRecordSize", maxRecordSize)
 				continue
 			}
 
@@ -152,7 +152,9 @@ func (clt *Client) listen() {
 			}
 
 			clt.buff.Write(r)
-			clt.buff.Write(newLine)
+			if clt.srv.cfg.ConcatRecords {
+				clt.buff.Write(newLine)
+			}
 
 			if clt.srv.cfg.LogRecordWrite {
 				slog.Info("Firehosepool wrote to buf", "worker", clt,
@@ -196,7 +198,7 @@ func (clt *Client) listen() {
 			}
 
 			// Only a flush
-			if l := len(clt.batch); l > 0 || err != nil {
+			if l := clt.totalBatchSize(); l > 0 || err != nil {
 				slog.Error("Firehosepool worker flush error", "worker", clt, "records-pending", l, "err", err)
 				clt.flushed <- false // WARN: To avoid blocking the processs
 			} else {
