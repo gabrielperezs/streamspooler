@@ -49,7 +49,7 @@ func (srv *Server) failure() {
 
 func (srv *Server) fhClientReset(cfg *Config) (err error) {
 	if srv.lastConnection.Add(limitIntervalConnection).Before(time.Now()) {
-		slog.Info("Firehosepool: creating new aws firehose client", "stream", srv.cfg.StreamName)
+		slog.Info("Firehosepool: creating new aws firehose client", "stream", cfg.StreamName)
 
 		var fhcg ClientGetter
 		if cfg.FHClientGetter != nil {

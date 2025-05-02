@@ -1,7 +1,13 @@
 # streamspooler Changelog
 
-## [2.0.0] - 2025-04-04
+## [Unreleased]
 
+### Fixed
+
+- Some logs where referencing a wrong StreamName variable.
+- Added missing CHANGELOG version links.
+
+## [2.0.0] - 2025-04-04
 
 ### Added
 
@@ -34,7 +40,9 @@
 - compress introduced magic prefix so not snappy compatible
 - Monad resources now are freed on Reload() if no longer needed (min and max workers are equal).
 
-
 ### Removed
 
 - Removed streamspooler/kinesis data streams
+
+[unreleased]: https://github.com/gabrielperezs/streamspooler/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/gabrielperezs/streamspooler/compare/v1.0.0...v2.0.0
