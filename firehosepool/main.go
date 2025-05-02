@@ -120,7 +120,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 	}
 
 	if err = srv.fhClientReset(cfg); err != nil {
-		slog.Error("Firehosepool: reload aborted due to firehose client error", "stream", srv.cfg.StreamName, "error", err)
+		slog.Error("Firehosepool: reload aborted due to firehose client error", "stream", cfg.StreamName, "error", err)
 		return
 	}
 
