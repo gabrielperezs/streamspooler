@@ -1,20 +1,18 @@
 # streamspooler Changelog
 
-## [Unreleased]
+## [2.0.1] - 2025-05-07
 
 ### Fixed
 
 - Some logs where referencing a wrong StreamName variable.
-- Added missing CHANGELOG version links.
 - fix maxRecordSize counting the return carriage concat by one byte.
 - fix flush counting totalBatchSize to check records not flushed.
+- Added missing CHANGELOG version links.
 
 ### Changed
 
 - Use metric Workers by label instead of stream name, just like other metrics.
 - Do not write newLine when ConcatRecords=false
-
-
 
 ## [2.0.0] - 2025-04-04
 
@@ -53,5 +51,5 @@
 
 - Removed streamspooler/kinesis data streams
 
-[unreleased]: https://github.com/gabrielperezs/streamspooler/compare/v2.0.0...HEAD
+[2.0.1]: https://github.com/gabrielperezs/streamspooler/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/gabrielperezs/streamspooler/compare/v1.0.0...v2.0.0
