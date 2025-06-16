@@ -79,3 +79,8 @@ func unRegisterMetrics() {
 	prometheus.Unregister(metricWorkers)
 	prometheus.Unregister(metricChannelPercentBusy)
 }
+
+func cleanMetrics(stream string) {
+	metricWorkers.DeleteLabelValues(stream)
+	metricChannelPercentBusy.DeleteLabelValues(stream)
+}

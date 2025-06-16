@@ -277,6 +277,8 @@ func (srv *Server) Exit() {
 
 	// finishing the server
 	srv.chDone <- true
+
+	cleanMetrics(srv.cfg.Label)
 }
 
 func (srv *Server) isExiting() bool {
