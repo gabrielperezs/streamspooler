@@ -1,5 +1,11 @@
 # streamspooler Changelog
 
+## [2.0.2] - 2025-06-17
+
+### Fixed
+
+- Clean stream gauge metric values on exit.
+
 ## [2.0.1] - 2025-05-07
 
 ### Fixed
@@ -51,5 +57,6 @@
 
 - Removed streamspooler/kinesis data streams
 
+[2.0.2]: https://github.com/gabrielperezs/streamspooler/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/gabrielperezs/streamspooler/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/gabrielperezs/streamspooler/compare/v1.0.0...v2.0.0
