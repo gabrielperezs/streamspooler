@@ -15,19 +15,17 @@ const (
 
 func (srv *Server) _reload() {
 	for range srv.chReload {
-		if srv.isExiting() {
-			continue
-		}
 		srv.clientsReset()
 	}
 }
 
 func (srv *Server) failure() {
-	if srv.isExiting() {
+	srv.Lock()
+	if srv.exiting {
+		srv.Unlock()
 		return
 	}
 
-	srv.Lock()
 	if time.Since(srv.lastError) > errorsFrame {
 		srv.errors = 0
 	}
@@ -35,17 +33,22 @@ func (srv *Server) failure() {
 	errCount := srv.errors
 	srv.lastError = time.Now()
 	stream := srv.cfg.StreamName
-	srv.Unlock()
 
+	// The signal goes out under the lock: Exit sets exiting under it before
+	// closing chReload, so this either sent before Exit took the lock or it
+	// does not send at all, which is what keeps a failure during teardown from
+	// sending on a closed channel. The default case keeps the send from ever
+	// waiting, whether or not _reload is reading.
 	reload := errCount > maxErrors
-	slog.Info("Firehosepool failure marked", "stream", stream, "errors", errCount, "reload", reload)
-
 	if reload {
 		select {
 		case srv.chReload <- true:
 		default:
 		}
 	}
+	srv.Unlock()
+
+	slog.Info("Firehosepool failure marked", "stream", stream, "errors", errCount, "reload", reload)
 }
 
 func (srv *Server) fhClientReset(cfg *Config) (err error) {
@@ -74,6 +77,14 @@ func (srv *Server) fhClientReset(cfg *Config) (err error) {
 func (srv *Server) clientsReset() {
 	srv.Lock()
 	defer srv.Unlock()
+
+	// Exit snapshots the workers under this same lock and then closes srv.C: a
+	// worker created after that snapshot would be left reading from a closed
+	// channel. Either this runs first and the new workers are in Exit's
+	// snapshot, or it does not run at all.
+	if srv.exiting {
+		return
+	}
 
 	defer func() {
 		slog.Info("Firehosepool: workers reset done", "stream", srv.cfg.StreamName, "workers", len(srv.clients), "in-queue", fmt.Sprintf("%d/%d", len(srv.C), cap(srv.C)))

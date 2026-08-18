@@ -204,9 +204,13 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 		srv.cliDesired.Store(int64(srv.cfg.MaxWorkers))
 	}
 
-	select {
-	case srv.chReload <- true:
-	default:
+	// Same contract as failure: no send once Exit has flagged the server, so the
+	// close it does after that cannot be raced.
+	if !srv.exiting {
+		select {
+		case srv.chReload <- true:
+		default:
+		}
 	}
 
 	return nil
@@ -269,10 +273,16 @@ func (srv *Server) Exit() {
 	clients := append([]*Client(nil), srv.clients...)
 	srv.Unlock()
 
+	// Stops the monad's DesireFn, the one chReload sender that cannot take the
+	// lock (Reload can invoke it while srv is locked). Exit is synchronous, so
+	// no callback survives it.
 	if m != nil {
 		m.Exit()
 	}
 
+	// Safe to close: the exiting flag above went out under the lock, and the
+	// senders that hold it (failure, Reload) check the flag before sending, so
+	// either they sent before this goroutine took the lock or they never will.
 	close(srv.chReload)
 
 	for _, c := range clients {

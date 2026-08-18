@@ -91,7 +91,16 @@ func (clt *Client) listen() {
 	slog.Info("Firehosepool: worker ready", "worker", clt)
 	for {
 		select {
-		case ri := <-clt.srv.C:
+		case ri, ok := <-clt.srv.C:
+			if !ok {
+				// The server closed the channel on its way out. This worker is
+				// one Exit did not see: clientsReset detaches a worker from
+				// srv.clients before exiting it, so a concurrent Server.Exit
+				// snapshots the pool without it. Nothing more will arrive and
+				// the batch cannot be delivered anyway.
+				slog.Info("Firehosepool worker exit: input channel closed", "worker", clt)
+				return
+			}
 
 			var r []byte
 			if clt.srv.cfg.Serializer != nil {
