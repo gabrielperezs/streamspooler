@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/firehose"
@@ -13,7 +14,6 @@ import (
 
 const (
 	defaultBufferSize      = 1024
-	defaultWorkers         = 1
 	defaultMaxWorkers      = 10
 	defaultMaxLines        = 500
 	defaultThresholdWarmUp = 0.6
@@ -69,10 +69,13 @@ type Config struct {
 type Server struct {
 	sync.Mutex
 
-	cfg        Config
-	C          chan interface{}
-	clients    []*Client
-	cliDesired int
+	cfg     Config
+	C       chan interface{}
+	clients []*Client
+
+	// cliDesired is written by the monad DesireFn callback, which can run
+	// while srv is locked, so it cannot be guarded by srv.Mutex.
+	cliDesired atomic.Int64
 
 	monad *monad.Monad
 
@@ -180,7 +183,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 			CoolDownPeriod: srv.cfg.CoolDownPeriod,
 			WarmFn:         srv.needsWarmup,
 			DesireFn: func(n uint64) {
-				srv.cliDesired = int(n)
+				srv.cliDesired.Store(int64(n))
 				select {
 				case srv.chReload <- true:
 				default:
@@ -198,7 +201,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 			srv.monad.Exit()
 			srv.monad = nil
 		}
-		srv.cliDesired = srv.cfg.MaxWorkers
+		srv.cliDesired.Store(int64(srv.cfg.MaxWorkers))
 	}
 
 	select {
@@ -210,7 +213,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 }
 
 func (srv *Server) needsWarmup() bool {
-	if srv.cliDesired == 0 {
+	if srv.cliDesired.Load() == 0 {
 		return true
 	}
 
@@ -235,11 +238,16 @@ func (srv *Server) Flush() (err error) {
 		return nil
 	}
 
-	for _, c := range srv.clients {
+	// Snapshot the workers: the reset goroutine can replace srv.clients at any
+	// time, and we must not hold the lock while waiting for a worker to flush
+	// (the worker takes the lock itself on failure).
+	clients := srv.clientsSnapshot()
+
+	for _, c := range clients {
 		c.finish <- false // It will flush
 	}
 
-	for _, c := range srv.clients {
+	for _, c := range clients {
 		f := <-c.flushed
 		if !f {
 			return errors.New("flushed failed")
@@ -257,15 +265,17 @@ func (srv *Server) Exit() {
 		return
 	}
 	srv.exiting = true
+	m := srv.monad
+	clients := append([]*Client(nil), srv.clients...)
 	srv.Unlock()
 
-	if srv.monad != nil {
-		srv.monad.Exit()
+	if m != nil {
+		m.Exit()
 	}
 
 	close(srv.chReload)
 
-	for _, c := range srv.clients {
+	for _, c := range clients {
 		c.Exit()
 	}
 
@@ -279,6 +289,22 @@ func (srv *Server) Exit() {
 	srv.chDone <- true
 
 	cleanMetrics(srv.cfg.Label)
+}
+
+// clientsSnapshot returns a copy of the current workers, safe to iterate
+// without holding the lock.
+func (srv *Server) clientsSnapshot() []*Client {
+	srv.Lock()
+	defer srv.Unlock()
+	return append([]*Client(nil), srv.clients...)
+}
+
+// Errors returns the number of consecutive flush errors accumulated in the
+// current error frame.
+func (srv *Server) Errors() int64 {
+	srv.Lock()
+	defer srv.Unlock()
+	return srv.errors
 }
 
 func (srv *Server) isExiting() bool {

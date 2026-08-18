@@ -7,7 +7,6 @@ import (
 )
 
 const (
-	connectionRetry         = 2 * time.Second
 	connectTimeout          = 15 * time.Second
 	errorsFrame             = 10 * time.Second
 	maxErrors               = 10 // Limit of errors to restart the connection
@@ -33,11 +32,13 @@ func (srv *Server) failure() {
 		srv.errors = 0
 	}
 	srv.errors++
-	reload := srv.errors > maxErrors
+	errCount := srv.errors
 	srv.lastError = time.Now()
+	stream := srv.cfg.StreamName
 	srv.Unlock()
 
-	slog.Info("Firehosepool failure marked", "stream", srv.cfg.StreamName, "errors", srv.errors, "reload", reload)
+	reload := errCount > maxErrors
+	slog.Info("Firehosepool failure marked", "stream", stream, "errors", errCount, "reload", reload)
 
 	if reload {
 		select {
@@ -79,23 +80,24 @@ func (srv *Server) clientsReset() {
 	}()
 
 	currClients := len(srv.clients)
+	cliDesired := int(srv.cliDesired.Load())
 
 	// No changes in the number of clients
-	if currClients == srv.cliDesired {
+	if currClients == cliDesired {
 		return
 	}
 
 	// If the config define lower number than the active clients remove the difference
-	if currClients > srv.cliDesired {
-		toExit := currClients - srv.cliDesired
-		for i := 0; i < toExit; i++ {
+	if currClients > cliDesired {
+		toExit := currClients - cliDesired
+		for range toExit {
 			go srv.clients[0].Exit() // Don't block waiting for the client to flush
 			srv.clients[0] = nil
 			srv.clients = srv.clients[1:]
 		}
 	} else {
 		// If the config define higher number than the active clients start new clients
-		for i := currClients; i < srv.cliDesired; i++ {
+		for i := currClients; i < cliDesired; i++ {
 			srv.clients = append(srv.clients, NewClient(srv))
 		}
 	}

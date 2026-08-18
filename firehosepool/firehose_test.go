@@ -34,6 +34,9 @@ func RandStringRunes(n int) string {
 }
 
 func TestTrottlingError(t *testing.T) {
+	// numReq is package level (the mocked client has no other way to report),
+	// so reset it to keep runs with -count>1 independent.
+	numReq.Store(0)
 
 	c := Config{
 		StreamName: "firehoseStreamName",
@@ -59,14 +62,22 @@ func TestTrottlingError(t *testing.T) {
 	p.C <- r
 	log.Printf("test message sent")
 
-	for trials := 0; len(p.clients) == 0 && trials < 5; trials++ {
+	for trials := 0; len(p.clientsSnapshot()) == 0 && trials < 5; trials++ {
 		time.Sleep(50 * time.Millisecond)
 	}
-	if len(p.clients) == 0 {
+	if len(p.clientsSnapshot()) == 0 {
 		t.Fatalf("Firehose: no client created\n")
 	}
 
-	err = p.Flush()
+	// The worker may not have consumed the record from p.C yet, and a flush with
+	// an empty batch is a no-op that returns no error. Retry until it has
+	// something to send.
+	for range 20 {
+		if err = p.Flush(); err != nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if err == nil {
 		t.Fatal("No Thottle error received")
 	}
@@ -75,9 +86,10 @@ func TestTrottlingError(t *testing.T) {
 		t.Fatalf("Firehose: no AWS Requests made\n")
 	}
 
-	if p.errors == 0 {
+	pErrs := p.Errors()
+	if pErrs == 0 {
 		// should do some errors and retries, due to forced throttling error
-		t.Fatalf("Firehose: errors %d\n", p.errors)
+		t.Fatalf("Firehose: errors %d\n", pErrs)
 	}
 
 	<-time.After(100 * time.Millisecond)
@@ -86,11 +98,12 @@ func TestTrottlingError(t *testing.T) {
 
 	p.Waiting()
 
-	if p.errors < numReq.Load()-1 {
-		t.Fatalf("Firehose: errors %d < requests -1  (%d)\n", p.errors, numReq.Load()-1)
+	pErrs = p.Errors()
+	if pErrs < numReq.Load()-1 {
+		t.Fatalf("Firehose: errors %d < requests -1  (%d)\n", pErrs, numReq.Load()-1)
 	}
 	fmt.Printf("Firehose mocked requests received: %d\n", numReq.Load())
-	fmt.Printf("Firehose srv forced errors count: %d\n", p.errors)
+	fmt.Printf("Firehose srv forced errors count: %d\n", pErrs)
 }
 
 type mockedClient struct{}
