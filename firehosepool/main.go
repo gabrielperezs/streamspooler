@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/firehose"
@@ -13,7 +14,6 @@ import (
 
 const (
 	defaultBufferSize      = 1024
-	defaultWorkers         = 1
 	defaultMaxWorkers      = 10
 	defaultMaxLines        = 500
 	defaultThresholdWarmUp = 0.6
@@ -69,10 +69,13 @@ type Config struct {
 type Server struct {
 	sync.Mutex
 
-	cfg        Config
-	C          chan interface{}
-	clients    []*Client
-	cliDesired int
+	cfg     Config
+	C       chan interface{}
+	clients []*Client
+
+	// cliDesired is written by the monad DesireFn callback, which can run
+	// while srv is locked, so it cannot be guarded by srv.Mutex.
+	cliDesired atomic.Int64
 
 	monad *monad.Monad
 
@@ -180,7 +183,7 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 			CoolDownPeriod: srv.cfg.CoolDownPeriod,
 			WarmFn:         srv.needsWarmup,
 			DesireFn: func(n uint64) {
-				srv.cliDesired = int(n)
+				srv.cliDesired.Store(int64(n))
 				select {
 				case srv.chReload <- true:
 				default:
@@ -198,19 +201,23 @@ func (srv *Server) Reload(cfg *Config) (err error) {
 			srv.monad.Exit()
 			srv.monad = nil
 		}
-		srv.cliDesired = srv.cfg.MaxWorkers
+		srv.cliDesired.Store(int64(srv.cfg.MaxWorkers))
 	}
 
-	select {
-	case srv.chReload <- true:
-	default:
+	// Same contract as failure: no send once Exit has flagged the server, so the
+	// close it does after that cannot be raced.
+	if !srv.exiting {
+		select {
+		case srv.chReload <- true:
+		default:
+		}
 	}
 
 	return nil
 }
 
 func (srv *Server) needsWarmup() bool {
-	if srv.cliDesired == 0 {
+	if srv.cliDesired.Load() == 0 {
 		return true
 	}
 
@@ -231,15 +238,22 @@ func (srv *Server) needsWarmup() bool {
 
 // Flush terminate all clients and close the channels
 func (srv *Server) Flush() (err error) {
-	if srv.isExiting() {
-		return nil
+	srv.Lock()
+	if srv.exiting {
+		srv.Unlock()
+		return
 	}
+	// Snapshot the workers: the reset goroutine can replace srv.clients at any
+	// time, and we must not hold the lock while waiting for a worker to flush
+	// (the worker takes the lock itself on failure).
+	clients := append([]*Client(nil), srv.clients...)
+	srv.Unlock()
 
-	for _, c := range srv.clients {
+	for _, c := range clients {
 		c.finish <- false // It will flush
 	}
 
-	for _, c := range srv.clients {
+	for _, c := range clients {
 		f := <-c.flushed
 		if !f {
 			return errors.New("flushed failed")
@@ -257,15 +271,23 @@ func (srv *Server) Exit() {
 		return
 	}
 	srv.exiting = true
+	m := srv.monad
+	clients := append([]*Client(nil), srv.clients...)
 	srv.Unlock()
 
-	if srv.monad != nil {
-		srv.monad.Exit()
+	// Stops the monad's DesireFn, the one chReload sender that cannot take the
+	// lock (Reload can invoke it while srv is locked). Exit is synchronous, so
+	// no callback survives it.
+	if m != nil {
+		m.Exit()
 	}
 
+	// Safe to close: the exiting flag above went out under the lock, and the
+	// senders that hold it (failure, Reload) check the flag before sending, so
+	// either they sent before this goroutine took the lock or they never will.
 	close(srv.chReload)
 
-	for _, c := range srv.clients {
+	for _, c := range clients {
 		c.Exit()
 	}
 
@@ -281,10 +303,20 @@ func (srv *Server) Exit() {
 	cleanMetrics(srv.cfg.Label)
 }
 
-func (srv *Server) isExiting() bool {
+// clientsSnapshot returns a copy of the current workers, safe to iterate
+// without holding the lock.
+func (srv *Server) clientsSnapshot() []*Client {
 	srv.Lock()
 	defer srv.Unlock()
-	return srv.exiting
+	return append([]*Client(nil), srv.clients...)
+}
+
+// Errors returns the number of consecutive flush errors accumulated in the
+// current error frame.
+func (srv *Server) Errors() int64 {
+	srv.Lock()
+	defer srv.Unlock()
+	return srv.errors
 }
 
 // Waiting to the server if is running

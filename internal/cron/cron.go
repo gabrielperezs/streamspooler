@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"sync"
 	"time"
 )
 
@@ -13,32 +14,40 @@ type Cron struct {
 	t    *time.Timer
 	d    time.Duration
 	done chan struct{}
+	once sync.Once
 }
 
 // New creates a cron timer that ticks each hour at d minutes and seconds
 // if d is greater than one hour, it uses only minutes and seconds
 func New(d time.Duration) *Cron {
-
 	// get only minutes ad seconds
 	if h := d.Truncate(time.Hour); h > 0 {
 		d = d - h
 	}
 
-	t := &Cron{
+	c := &Cron{
 		C:    make(chan time.Time),
 		done: make(chan struct{}),
 		d:    d,
 	}
-	go t.start()
-	return t
+	// The timer is created before starting the goroutine, so Stop can read
+	// t.t without racing with start.
+	c.t = time.NewTimer(c.next(time.Now()))
+	go c.start()
+	return c
 }
 
 func (c *Cron) start() {
-	c.t = time.NewTimer(c.next(time.Now()))
 	for {
 		select {
 		case n := <-c.t.C:
-			c.C <- n
+			// Give up the tick if Stop is called while nobody is reading C,
+			// otherwise this goroutine would leak.
+			select {
+			case c.C <- n:
+			case <-c.done:
+				return
+			}
 			c.t.Reset(c.next(time.Now()))
 		case <-c.done:
 			return
@@ -46,11 +55,16 @@ func (c *Cron) start() {
 	}
 }
 
+// Stop halts the cron. It is safe to call more than once, but only the first
+// call reports whether the pending tick was stopped before firing.
+// C is never closed, so a stopped cron simply never ticks again.
 func (c *Cron) Stop() bool {
-	s := c.t.Stop()
-	close(c.C)
-	close(c.done)
-	return s
+	stopped := false
+	c.once.Do(func() {
+		stopped = c.t.Stop()
+		close(c.done)
+	})
+	return stopped
 }
 
 // next retuns the duration to the nex tick
