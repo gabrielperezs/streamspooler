@@ -238,14 +238,16 @@ func (srv *Server) needsWarmup() bool {
 
 // Flush terminate all clients and close the channels
 func (srv *Server) Flush() (err error) {
-	if srv.isExiting() {
-		return nil
+	srv.Lock()
+	if srv.exiting {
+		srv.Unlock()
+		return
 	}
-
 	// Snapshot the workers: the reset goroutine can replace srv.clients at any
 	// time, and we must not hold the lock while waiting for a worker to flush
 	// (the worker takes the lock itself on failure).
-	clients := srv.clientsSnapshot()
+	clients := append([]*Client(nil), srv.clients...)
+	srv.Unlock()
 
 	for _, c := range clients {
 		c.finish <- false // It will flush
@@ -315,12 +317,6 @@ func (srv *Server) Errors() int64 {
 	srv.Lock()
 	defer srv.Unlock()
 	return srv.errors
-}
-
-func (srv *Server) isExiting() bool {
-	srv.Lock()
-	defer srv.Unlock()
-	return srv.exiting
 }
 
 // Waiting to the server if is running
